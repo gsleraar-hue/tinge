@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' blob: data:; style-src 'self'; script-src 'self'"
+    />
+    <title>Tinge</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="bar">
+      <div class="brand">
+        <span class="mark" aria-hidden="true"></span>
+        <span class="name">Tinge</span>
+      </div>
+
+      <div class="seg" role="radiogroup" aria-label="Colour style">
+        <button class="seg-btn" role="radio" data-model="natural">Natural</button>
+        <button class="seg-btn" role="radio" data-model="vivid">Vivid</button>
+      </div>
+
+      <div class="actions">
+        <button id="btn-add" class="btn">Add photos</button>
+        <button id="btn-save" class="btn primary" disabled>Save</button>
+        <button id="btn-save-all" class="btn" disabled>Save all</button>
+      </div>
+    </header>
+
+    <div class="layout">
+      <aside class="list" id="list" aria-label="Photos"></aside>
+
+      <main class="stage" id="stage">
+        <div class="empty" id="empty">
+          <div class="empty-art" aria-hidden="true"></div>
+          <h1>Drop black-and-white photos here</h1>
+          <p>Or pick them with <strong>Add photos</strong>. A whole folder works too.</p>
+          <p class="fine">Everything happens on this computer; nothing goes to the internet.</p>
+        </div>
+
+        <div class="viewer" id="viewer" hidden>
+          <div class="frame" id="frame">
+            <canvas id="after"></canvas>
+            <canvas id="before"></canvas>
+            <div class="split" id="split" role="slider" tabindex="0" aria-label="Compare before and after">
+              <span class="knob"></span>
+            </div>
+            <span class="tag tag-l">Original</span>
+            <span class="tag tag-r">Coloured</span>
+          </div>
+          <div class="busy" id="busy" hidden>
+            <div class="busy-text" id="busy-text">Colouring…</div>
+            <div class="meter"><span id="busy-bar"></span></div>
+          </div>
+        </div>
+
+        <div class="drop" id="drop" hidden><span>Let go to add</span></div>
+      </main>
+
+      <aside class="panel">
+        <section>
+          <h2>Adjust</h2>
+          <label class="field">
+            <span class="field-head"><span>Colour strength</span><output id="out-sat">100%</output></span>
+            <input type="range" id="sat" min="0" max="200" step="1" value="100" />
+          </label>
+          <label class="field">
+            <span class="field-head"><span>Warmth</span><output id="out-warm">0</output></span>
+            <input type="range" id="warm" min="-100" max="100" step="1" value="0" />
+          </label>
+          <button id="btn-reset" class="link">Reset</button>
+        </section>
+
+        <section>
+          <h2>Style</h2>
+          <p class="hint" id="style-hint"></p>
+        </section>
+
+        <section class="info">
+          <h2>Photo</h2>
+          <dl id="meta">
+            <dt>File</dt><dd id="meta-name">–</dd>
+            <dt>Size</dt><dd id="meta-size">–</dd>
+            <dt>Colouring</dt><dd id="meta-time">–</dd>
+          </dl>
+        </section>
+
+        <p class="keys">Drag across the photo to compare · hold <kbd>Space</kbd> to see the original · <kbd>↑</kbd><kbd>↓</kbd> previous/next</p>
+      </aside>
+    </div>
+
+    <div class="modal" id="modal" hidden>
+      <div class="card">
+        <h2 id="modal-title">Download colour model</h2>
+        <p id="modal-text"></p>
+        <div class="meter big"><span id="modal-bar"></span></div>
+        <p class="fine" id="modal-progress"></p>
+        <div class="card-actions">
+          <button class="btn" id="modal-cancel">Later</button>
+          <button class="btn primary" id="modal-go">Download</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="toast" id="toast" hidden></div>
+
+    <script src="color.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

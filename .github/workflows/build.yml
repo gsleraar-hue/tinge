@@ -1,0 +1,139 @@
+# Let GitHub build Tinge.
+#
+# You do not need a Mac of your own: GitHub has them. This workflow builds the
+# .dmg (Apple Silicon) on a Mac runner and the installer plus a portable .exe
+# on a Windows runner, and a third job hangs everything on one release.
+#
+# Two ways to start it:
+#   - by hand, through the Actions tab -> Build -> Run workflow
+#   - by pushing a version tag:  git tag v1.0.1 && git push origin v1.0.1
+#
+# The macOS app is ad-hoc signed, not notarised (that needs an Apple account at
+# $99 a year). On first launch: right-click the app, then Open.
+
+name: Build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            name: mac
+            command: npm run dist-mac
+            files: |
+              dist/*.dmg
+              dist/*.zip
+          - os: windows-latest
+            name: windows
+            command: npm run dist
+            files: |
+              dist/*.exe
+
+    runs-on: ${{ matrix.os }}
+
+    env:
+      # With no Apple certificate there is nothing to sign with. Leave this out
+      # and electron-builder goes looking for one anyway, and the build dies.
+      CSC_IDENTITY_AUTO_DISCOVERY: false
+      # A failed build must not drown in progress bars.
+      npm_config_progress: false
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: What is running here?
+        shell: bash
+        run: |
+          echo "node: $(node --version)"
+          echo "npm:  $(npm --version)"
+          echo "os:   $RUNNER_OS $(uname -m)"
+
+      # Electron itself (over 100 MB per architecture) comes from a server that
+      # hands out the odd 504. Whatever was fetched once stays here.
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/Library/Caches/electron-builder
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Fetch packages
+        run: npm install --no-audit --no-fund
+
+      - name: Redraw the icons
+        run: npm run icon
+
+      - name: Check the colour maths
+        run: npm test
+
+      # The AI runtime is a native library, different on every platform. If it
+      # cannot load here, the app could not colour anything either.
+      - name: Check the AI runtime loads
+        shell: bash
+        run: node -e "const ort=require('onnxruntime-node'); console.log('onnxruntime-node', require('onnxruntime-node/package.json').version, 'loaded:', typeof ort.InferenceSession.create)"
+
+      # If the download stalls halfway (it happens), try again - up to three times.
+      - name: Build
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            ${{ matrix.command }} && exit 0
+            echo "attempt $attempt stalled - waiting, then trying again"
+            sleep 30
+          done
+          exit 1
+
+      - name: What came out?
+        if: always()
+        shell: bash
+        run: ls -la dist/ || echo "no dist folder"
+
+      # Even if the build stalls halfway: whatever is there, you can download.
+      - name: Keep as a download
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: tinge-${{ matrix.name }}
+          path: ${{ matrix.files }}
+          if-no-files-found: warn
+
+  # One job puts everything on the release. Letting both build jobs publish
+  # would race: each creates the release if it is not there yet, and you end up
+  # with two releases carrying half the files each.
+  release:
+    needs: [build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Collect the builds
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: What are we publishing?
+        run: ls -laR artifacts
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: artifacts/**/*
+          draft: false
+          generate_release_notes: true
