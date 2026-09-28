@@ -89,6 +89,16 @@ jobs:
         shell: bash
         run: node -e "const ort=require('onnxruntime-node'); console.log('onnxruntime-node', require('onnxruntime-node/package.json').version, 'loaded:', typeof ort.InferenceSession.create)"
 
+      # ffmpeg-static fetches its binary while installing. Without it, films
+      # cannot be read or written, so make sure it is really there and runs.
+      - name: Check FFmpeg is there
+        shell: bash
+        run: |
+          FF=$(node -p "require('ffmpeg-static')")
+          echo "ffmpeg: $FF"
+          "$FF" -hide_banner -version | head -1
+          "$FF" -hide_banner -encoders | grep -E "libx264|aac "
+
       # If the download stalls halfway (it happens), try again - up to three times.
       - name: Build
         shell: bash

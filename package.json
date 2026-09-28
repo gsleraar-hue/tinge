@@ -1,8 +1,8 @@
 {
   "name": "tinge",
   "productName": "Tinge",
-  "version": "1.0.0",
-  "description": "Colour black-and-white photos with DDColor, entirely on your own computer",
+  "version": "1.1.0",
+  "description": "Colour black-and-white photos and films with DDColor, entirely on your own computer",
   "main": "main.js",
   "private": true,
   "license": "MIT",
@@ -25,12 +25,15 @@
       "main.js",
       "preload.js",
       "models.js",
+      "video.js",
+      "videocolor.js",
       "renderer/**",
       "build/icon.ico",
       "build/icon.png"
     ],
     "asarUnpack": [
-      "node_modules/onnxruntime-node/**"
+      "node_modules/onnxruntime-node/**",
+      "node_modules/ffmpeg-static/**"
     ],
     "afterPack": "build/after-pack.js",
     "win": {
@@ -81,6 +84,7 @@
     }
   },
   "dependencies": {
+    "ffmpeg-static": "^5.3.0",
     "onnxruntime-node": "^1.30.0"
   },
   "devDependencies": {

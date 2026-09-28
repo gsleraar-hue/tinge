@@ -22,7 +22,7 @@
       </div>
 
       <div class="actions">
-        <button id="btn-add" class="btn">Add photos</button>
+        <button id="btn-add" class="btn">Add photos or videos</button>
         <button id="btn-save" class="btn primary" disabled>Save</button>
         <button id="btn-save-all" class="btn" disabled>Save all</button>
       </div>
@@ -34,12 +34,13 @@
       <main class="stage" id="stage">
         <div class="empty" id="empty">
           <div class="empty-art" aria-hidden="true"></div>
-          <h1>Drop black-and-white photos here</h1>
-          <p>Or pick them with <strong>Add photos</strong>. A whole folder works too.</p>
+          <h1>Drop black-and-white photos or films here</h1>
+          <p>Or pick them with <strong>Add photos or videos</strong>. A whole folder works too.</p>
           <p class="fine">Everything happens on this computer; nothing goes to the internet.</p>
         </div>
 
         <div class="viewer" id="viewer" hidden>
+          <div class="canvas-box" id="canvas-box">
           <div class="frame" id="frame">
             <canvas id="after"></canvas>
             <canvas id="before"></canvas>
@@ -48,6 +49,11 @@
             </div>
             <span class="tag tag-l">Original</span>
             <span class="tag tag-r">Coloured</span>
+          </div>
+          </div>
+          <div class="scrub" id="scrub-bar" hidden>
+            <input type="range" id="scrub" min="0" max="1000" step="1" value="100" aria-label="Preview position" />
+            <span class="scrub-time" id="scrub-time">0:00</span>
           </div>
           <div class="busy" id="busy" hidden>
             <div class="busy-text" id="busy-text">Colouring…</div>
@@ -72,6 +78,37 @@
           <button id="btn-reset" class="link">Reset</button>
         </section>
 
+        <section class="video" id="video-panel" hidden>
+          <h2>Video</h2>
+          <dl class="facts">
+            <dt>Length</dt><dd id="v-length">–</dd>
+            <dt>Frames</dt><dd id="v-frames">–</dd>
+          </dl>
+          <div class="field">
+            <span class="field-head"><span>Quality</span></span>
+            <div class="seg small" id="v-quality" role="radiogroup" aria-label="Quality">
+              <button class="seg-btn" role="radio" data-value="fast">Fast</button>
+              <button class="seg-btn" role="radio" data-value="balanced">Balanced</button>
+              <button class="seg-btn" role="radio" data-value="best">Best</button>
+            </div>
+          </div>
+          <div class="field">
+            <span class="field-head"><span>Flicker filter</span></span>
+            <div class="seg small" id="v-flicker" role="radiogroup" aria-label="Flicker filter">
+              <button class="seg-btn" role="radio" data-value="off">Off</button>
+              <button class="seg-btn" role="radio" data-value="normal">Normal</button>
+              <button class="seg-btn" role="radio" data-value="strong">Strong</button>
+            </div>
+          </div>
+          <p class="hint" id="v-note"></p>
+          <div class="meter" id="v-meter" hidden><span id="v-bar"></span></div>
+          <p class="hint strong" id="v-status" hidden></p>
+          <div class="row">
+            <button class="btn primary" id="v-go">Colour video…</button>
+            <button class="btn" id="v-second" hidden></button>
+          </div>
+        </section>
+
         <section>
           <h2>Style</h2>
           <p class="hint" id="style-hint"></p>
@@ -86,7 +123,7 @@
           </dl>
         </section>
 
-        <p class="keys">Drag across the photo to compare · hold <kbd>Space</kbd> to see the original · <kbd>↑</kbd><kbd>↓</kbd> previous/next</p>
+        <p class="keys">Drag across the photo to compare · hold <kbd>Space</kbd> to see the original · <kbd>↑</kbd><kbd>↓</kbd> previous/next · the sliders also apply to videos you start</p>
       </aside>
     </div>
 

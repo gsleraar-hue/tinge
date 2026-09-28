@@ -1,10 +1,11 @@
 # Tinge
 
-**Colour black-and-white photos, entirely on your own computer.**
+**Colour black-and-white photos and films, entirely on your own computer.**
 
 Tinge is a desktop app for Windows and macOS. Drop in an old photo (or a whole
 folder of them) and a few seconds later you have a colour version, at the full
-resolution of the original. No account, no upload, no subscription.
+resolution of the original. Drop in an old film and Tinge colours it frame by
+frame, keeping the sound. No account, no upload, no subscription.
 
 ![Billie Holiday, 1947, before and after](docs/example-holiday.jpg)
 
@@ -47,6 +48,32 @@ Intel Macs are not supported: the AI runtime Tinge uses only ships for Apple Sil
 - **Batches.** Add as many photos as you like; they are coloured one by one.
   **Save all** writes them to a folder of your choice as `name (colour).jpg`.
 
+## Films
+
+Tinge also colours video: home movies, newsreels, whole feature films. Select a
+video in the list and:
+
+1. **Pick a preview frame** with the bar under the picture. It is coloured
+   straight away, so you can try the style and sliders on the film itself.
+2. **Choose the quality.** *Fast* lets the AI look at every 8th frame,
+   *Balanced* at every 4th, *Best* at every frame. In between, Tinge fills in the
+   colour itself, and it takes an extra look whenever a lot moves on screen.
+3. **Choose the flicker filter.** The AI judges each frame on its own, so a coat
+   could turn blue, then grey-blue, then blue again. The filter steadies the
+   colour over time, but never across a scene cut and never on things that move,
+   so colours do not trail behind a passing car.
+4. **Colour video…** asks where to save the result, then gets to work. The panel
+   shows how far it is and how long it will take.
+
+A feature film is a job for a night or two: on an ordinary laptop *Fast* manages
+roughly 2 to 4 frames a second, so 90 minutes takes somewhere around 10 to 20
+hours. You can **pause** at any time and **continue** later, even after closing
+Tinge or restarting the computer; at most the last 30 seconds of film are
+redone. While a film is being coloured, the computer is kept from going to sleep.
+
+The result is an MP4 (H.264) with the original sound (AAC). Tinge keeps the
+original picture detail untouched and only adds colour.
+
 Shortcuts: <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>O</kbd> add photos,
 <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>S</kbd> save, <kbd>↑</kbd> <kbd>↓</kbd> previous/next photo.
 
@@ -62,7 +89,10 @@ a neural network trained on millions of colour photos, through
    the original photo at full size.
 
 Step 3 is why the result is as sharp as the original: the model never touches
-the detail, only the colour. On an ordinary laptop a photo takes about 4 to 8
+the detail, only the colour. For films the same idea works in the video's own
+YUV format: the brightness plane of every frame passes through untouched and
+Tinge writes only the two colour planes. [FFmpeg](https://ffmpeg.org/) does the
+reading and writing of the video files. On an ordinary laptop a photo takes about 4 to 8
 seconds; loading the model the first time adds a few seconds.
 
 Like every automatic colouriser, DDColor guesses. It knows skin, sky, grass,
@@ -76,7 +106,7 @@ You need [Node.js](https://nodejs.org/) 22 or later.
 ```bash
 npm install
 npm start          # run from source
-npm test           # check the colour maths
+npm test           # check the colour and video maths
 npm run dist       # Windows installer + portable exe in dist/
 npm run dist-mac   # macOS dmg + zip in dist/ (on a Mac)
 ```
@@ -84,7 +114,13 @@ npm run dist-mac   # macOS dmg + zip in dist/ (on a Mac)
 The GitHub Actions workflow in [.github/workflows/build.yml](.github/workflows/build.yml)
 builds both platforms and publishes a release whenever a `v*` tag is pushed.
 
-To test the whole pipeline without a window, point `TINGE_SELFTEST` at an
+To colour a film without the window (using the models Tinge has downloaded):
+
+```bash
+node dev/videotest.js old.mp4 coloured.mp4 fast
+```
+
+To test the whole photo pipeline without a window, point `TINGE_SELFTEST` at an
 input and an output file. Tinge colours the photo, writes a report to
 `selftest.json` in its data folder and quits:
 
@@ -98,6 +134,8 @@ TINGE_SELFTEST="old.jpg|coloured.jpg|natural" npx electron .
 | --- | --- |
 | `main.js` | Window, file dialogs, saving |
 | `models.js` | Downloads the models and runs them with ONNX Runtime |
+| `video.js` | Colours films: keyframes, scene cuts, chunks, pause and continue |
+| `videocolor.js` | Per-frame video maths: colour planes, motion, smoothing |
 | `renderer/color.js` | Colour maths: model input, Lab conversion, recombining at full size |
 | `renderer/app.js` | The interface: list, queue, before/after view, sliders |
 | `dev/make-icon.js` | Draws the app icon (`npm run icon`) |
@@ -108,4 +146,10 @@ TINGE_SELFTEST="old.jpg|coloured.jpg|natural" npx electron .
   Apache License 2.0. The ONNX exports are downloaded from the
   [FaceFusion assets](https://github.com/facefusion/facefusion-assets) release.
 - AI runtime: [ONNX Runtime](https://github.com/microsoft/onnxruntime) by Microsoft, MIT License.
+- Video: [FFmpeg](https://ffmpeg.org/), shipped as an unmodified binary from the
+  [ffmpeg-static](https://github.com/eugeneware/ffmpeg-static) package. That build
+  is licensed under the GPL (version 3 or later); its licence and build notes are
+  inside the app next to the binary, and the source code is available from
+  [ffmpeg.org](https://ffmpeg.org/download.html). Tinge runs it as a separate
+  program.
 - Tinge itself: [MIT License](LICENSE).

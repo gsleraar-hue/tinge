@@ -306,8 +306,35 @@ button {
   position: absolute;
   inset: 20px;
   display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.canvas-box {
+  flex: 1;
+  min-height: 0;
+  display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.scrub {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 4px;
+}
+
+.scrub input {
+  flex: 1;
+}
+
+.scrub-time {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 96px;
+  text-align: right;
 }
 
 .frame {
@@ -650,4 +677,72 @@ kbd {
 
 .toast button {
   margin-left: 10px;
+}
+
+/* ---------------------------------------------------------------- video */
+
+.seg.small {
+  width: 100%;
+}
+
+.seg.small .seg-btn {
+  flex: 1;
+  padding: 5px 0;
+  font-size: 12.5px;
+}
+
+.seg-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.facts {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 12px;
+  width: 100%;
+}
+
+.facts dt {
+  color: var(--faint);
+}
+
+.facts dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.video .meter {
+  width: 100%;
+  height: 6px;
+}
+
+.hint.strong {
+  color: var(--text);
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.item .dur {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.7);
+  font-variant-numeric: tabular-nums;
+}
+
+.item.video .cap {
+  padding-right: 52px;
+}
+
+.viewer.has-scrub .busy {
+  bottom: 60px;
 }

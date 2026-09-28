@@ -69,4 +69,54 @@ check('colour follows the model, and strength 0 removes it again', () => {
   assert(none[0] === none[1] && none[1] === none[2], 'expected grey');
 });
 
+// ---------------------------------------------------------------- video
+
+const VC = require('../videocolor.js');
+
+check('video: zero chroma gives neutral U and V planes', () => {
+  const W = 16;
+  const H = 8;
+  const size = 4;
+  const Y = new Uint8Array(W * H).map((_, i) => 16 + (i % 200));
+  const U = new Uint8Array((W / 2) * (H / 2));
+  const V = new Uint8Array(U.length);
+  VC.chroma(Y, W, H, new Float32Array(2 * size * size), size, {}, U, V);
+  for (let i = 0; i < U.length; i++) assert(Math.abs(U[i] - 128) <= 1 && Math.abs(V[i] - 128) <= 1, `${U[i]},${V[i]}`);
+});
+
+check('video: red in the model gives red chroma (V above U)', () => {
+  const size = 4;
+  const ab = new Float32Array(2 * size * size).fill(40, 0, size * size);
+  const Y = new Uint8Array(8 * 8).fill(120);
+  const U = new Uint8Array(16);
+  const V = new Uint8Array(16);
+  VC.chroma(Y, 8, 8, ab, size, {}, U, V);
+  assert(V[0] > 150 && V[0] - 128 > 4 * (U[0] - 128), `U ${U[0]} V ${V[0]}`);
+});
+
+check('video: still areas blend, moved areas follow the matching keyframe', () => {
+  const n = 4;
+  const abA = new Float32Array(2 * n).fill(0);
+  const abB = new Float32Array(2 * n).fill(30);
+  const greyA = new Float32Array([0.5, 0.5, 0.2, 0.2]);
+  const greyB = new Float32Array([0.5, 0.5, 0.8, 0.8]);
+  // pixels 0-1 are still; pixel 2 looks like B, pixel 3 like A
+  const grey = new Float32Array([0.5, 0.5, 0.8, 0.2]);
+  const out = VC.between(abA, abB, greyA, greyB, grey, 0.25);
+  assert(Math.abs(out[0] - 7.5) < 1e-4, 'still: plain blend');
+  assert(out[2] > 29, 'moved, looks like B: B colour');
+  assert(out[3] < 1, 'moved, looks like A: A colour');
+});
+
+check('video: scene cuts are found, grain is not a cut', () => {
+  const W = 128;
+  const H = 72;
+  const dark = new Uint8Array(W * H).fill(40);
+  const light = new Uint8Array(W * H).fill(200);
+  const grainy = dark.map((v, i) => v + ((i * 7919) % 9) - 4);
+  const a = VC.signature(dark, W, H);
+  assert(VC.isCut(a, VC.signature(light, W, H)), 'dark -> light is a cut');
+  assert(!VC.isCut(a, VC.signature(grainy, W, H)), 'grain is not a cut');
+});
+
 console.log(`\n${passed} checks passed`);

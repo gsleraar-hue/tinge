@@ -24,7 +24,10 @@ const state = {
   split: 0.5,
   status: {},
   queueBusy: false,
-  lastMs: 7000,
+  lastMs: Number(load('lastMs', 6000)), // model time at 512 px, for estimates
+  vquality: load('vquality', 'balanced'),
+  vflicker: load('vflicker', 'normal'),
+  videoBusy: false, // some video is being coloured
 };
 
 let nextId = 1;
@@ -70,11 +73,39 @@ const SHOW_LABEL = api.platform === 'darwin' ? 'Show in Finder' : 'Show in folde
 
 // ---------------------------------------------------------------- images
 
-async function decode(file) {
-  const data = await api.read(file);
-  if (data && data.error) throw new Error(data.error);
-  const blob = new Blob([data]);
-  return createImageBitmap(blob, { imageOrientation: 'from-image' });
+// A photo, or for a video the frame at item.frameTime (fetched once, then kept).
+async function decode(item) {
+  let data;
+  if (item.kind === 'video') {
+    if (!item.frame || item.frame.t !== item.frameTime) {
+      const r = await api.video.frame(item.path, item.frameTime);
+      if (r.error) throw new Error(r.error);
+      item.frame = { t: item.frameTime, data: r.value };
+    }
+    data = item.frame.data;
+  } else {
+    data = await api.read(item.path);
+    if (data && data.error) throw new Error(data.error);
+  }
+  return createImageBitmap(new Blob([data]), { imageOrientation: 'from-image' });
+}
+
+function clock(sec) {
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = String(sec % 60).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
+}
+
+function duration(sec) {
+  if (sec < 90) return 'under 2 minutes';
+  const min = Math.round(sec / 60);
+  if (min < 60) return `about ${min} minutes`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  if (h >= 10) return `about ${Math.round(min / 60)} hours`;
+  return m ? `about ${h} h ${m} min` : `about ${h} h`;
 }
 
 function pixels(bitmap, w, h) {
@@ -134,6 +165,11 @@ function addItems(files) {
       path: f.path,
       name: f.name,
       dir: f.dir,
+      kind: f.kind || 'photo',
+      info: null, // video: probe result
+      frameTime: 0, // video: position of the preview frame
+      frame: null,
+      job: null, // video: colouring job, if any
       width: 0,
       height: 0,
       results: {},
@@ -144,13 +180,30 @@ function addItems(files) {
     }));
   state.items.push(...fresh);
   if (!fresh.length) {
-    if (files.length) toast('Those photos are already in the list.');
-    else toast('No usable photos found (jpg, png, webp, bmp, gif, avif).');
+    if (files.length) toast('Those files are already in the list.');
+    else toast('No usable photos or videos found.');
     return;
   }
   renderList();
   if (!state.current) select(fresh[0]);
   pump();
+}
+
+async function prepareVideo(item) {
+  const r = await api.video.probe(item.path);
+  if (r.error) {
+    item.error = r.error;
+    updateItem(item);
+    return false;
+  }
+  item.info = r.value;
+  item.frameTime = Math.min(item.info.duration * 0.1, 10);
+  const st = await api.video.status(item.path);
+  item.job = st.ok ? st.value : null;
+  const dur = item.el && item.el.querySelector('.dur');
+  if (dur) dur.textContent = clock(item.info.duration);
+  updateItem(item);
+  return true;
 }
 
 function renderList() {
@@ -162,13 +215,26 @@ function renderList() {
       el.innerHTML = '<img alt="" /><span class="state"></span><span class="cap"></span><button class="x" title="Remove">×</button>';
       el.querySelector('.cap').textContent = item.name;
       el.title = item.path;
+      if (item.kind === 'video') {
+        el.classList.add('video');
+        el.insertAdjacentHTML('beforeend', '<span class="dur">…</span>');
+      }
       el.onclick = (e) => {
         if (e.target.closest('.x')) return removeItem(item);
         select(item);
       };
       item.el = el;
       list.appendChild(el);
-      makeThumb(item);
+      if (item.kind === 'video') {
+        prepareVideo(item).then((ok) => {
+          if (!ok) return;
+          makeThumb(item);
+          if (item === state.current) select(item);
+          pump();
+        });
+      } else {
+        makeThumb(item);
+      }
     }
     updateItem(item);
   }
@@ -177,7 +243,7 @@ function renderList() {
 
 async function makeThumb(item, ab) {
   try {
-    const bmp = await decode(item.path);
+    const bmp = await decode(item);
     item.width = bmp.width;
     item.height = bmp.height;
     const url = await thumbnail(bmp, ab);
@@ -186,7 +252,7 @@ async function makeThumb(item, ab) {
     item.thumb = url;
     if (item.el) item.el.querySelector('img').src = url;
   } catch (err) {
-    item.error = 'Cannot open this photo';
+    item.error = item.kind === 'video' ? 'Cannot read this video' : 'Cannot open this photo';
     updateItem(item);
   }
 }
@@ -197,8 +263,21 @@ function updateItem(item) {
   const s = item.el.querySelector('.state');
   const done = !!item.results[state.model];
   const working = item.working === state.model;
+  const job = item.job;
+  if (item.kind === 'video' && job && !item.error) {
+    const pct = job.total ? Math.floor((100 * job.done) / job.total) : 0;
+    const label = { running: `Colouring ${pct}%`, paused: `Paused ${pct}%`, done: 'Video done', failed: 'Stopped' }[job.state];
+    const cls = { done: ' done', running: ' work', failed: ' fail' }[job.state] || '';
+    s.className = 'state' + cls;
+    s.textContent = label || 'Video';
+    return;
+  }
   s.className = 'state' + (item.error ? ' fail' : done ? ' done' : working ? ' work' : '');
-  s.textContent = item.error ? 'Failed' : done ? 'Done' : working ? 'Working…' : 'Waiting';
+  s.textContent = item.error
+    ? 'Failed'
+    : done
+      ? item.kind === 'video' ? 'Preview' : 'Done'
+      : working ? 'Working…' : 'Waiting';
 }
 
 function removeItem(item) {
@@ -218,8 +297,8 @@ function removeItem(item) {
 
 function updateButtons() {
   const cur = state.current;
-  $('btn-save').disabled = !(cur && cur.results[state.model]);
-  $('btn-save-all').disabled = !state.items.some((i) => i.results[state.model]);
+  $('btn-save').disabled = !(cur && cur.kind !== 'video' && cur.results[state.model]);
+  $('btn-save-all').disabled = !state.items.some((i) => i.kind !== 'video' && i.results[state.model]);
 }
 
 // ---------------------------------------------------------------- viewer
@@ -235,6 +314,7 @@ function clearViewer() {
   $('meta-name').textContent = '–';
   $('meta-size').textContent = '–';
   $('meta-time').textContent = '–';
+  renderVideoPanel();
   updateButtons();
 }
 
@@ -246,10 +326,12 @@ async function select(item) {
   $('viewer').hidden = false;
   $('meta-name').textContent = item.name;
   $('meta-name').title = item.path;
+  renderVideoPanel();
+  if (item.kind === 'video' && !item.info) return; // still being read; select() runs again
 
   let bmp;
   try {
-    bmp = await decode(item.path);
+    bmp = await decode(item);
   } catch (err) {
     if (state.current === item) toast(`Cannot open ${item.name}: ${err.message}`, { error: true });
     return;
@@ -267,7 +349,7 @@ async function select(item) {
 // Fits the canvases to the available space and draws both halves.
 function layout() {
   if (!view) return;
-  const box = $('viewer').getBoundingClientRect();
+  const box = $('canvas-box').getBoundingClientRect();
   const [cw, ch] = fit(view.bitmap.width, view.bitmap.height, box.width, box.height);
   const dpr = window.devicePixelRatio || 1;
   const [pw, ph] = fit(view.bitmap.width, view.bitmap.height, Math.min(cw * dpr, PREVIEW_MAX), Math.min(ch * dpr, PREVIEW_MAX));
@@ -367,7 +449,9 @@ async function pump() {
     for (;;) {
       if (state.model !== model) break;
       // The photo you are looking at first, then the rest from top to bottom.
-      const todo = state.items.filter((i) => !i.results[model] && !i.error && !i.removed);
+      const todo = state.items.filter(
+        (i) => !i.results[model] && !i.error && !i.removed && (i.kind !== 'video' || i.info),
+      );
       if (!todo.length) break;
       const item = todo.includes(state.current) ? state.current : todo[0];
       await colorItem(item, model);
@@ -384,13 +468,15 @@ async function colorItem(item, model) {
   updateItem(item);
   if (item === state.current) showBusy();
   try {
-    const bmp = await decode(item.path);
+    const bmp = await decode(item);
     const input = C.toModelInput(modelPixels(bmp), SIZE);
     const res = await api.colorize(model, input, SIZE);
     if (res.error) throw new Error(res.error);
     item.results[model] = res.ab;
     item.times[model] = res.ms;
     state.lastMs = res.ms;
+    store('lastMs', res.ms);
+    if (item === state.current) renderVideoPanel();
     const url = await thumbnail(bmp, res.ab);
     bmp.close();
     if (item.thumb) URL.revokeObjectURL(item.thumb);
@@ -424,7 +510,7 @@ function outputType(ext) {
 }
 
 async function renderFull(item, model, mime) {
-  const bmp = await decode(item.path);
+  const bmp = await decode(item);
   const w = bmp.width;
   const h = bmp.height;
   const c = new OffscreenCanvas(w, h);
@@ -457,7 +543,7 @@ async function saveOne() {
 }
 
 async function saveAll() {
-  const done = state.items.filter((i) => i.results[state.model]);
+  const done = state.items.filter((i) => i.kind !== 'video' && i.results[state.model]);
   if (!done.length) return;
   const folder = await api.chooseFolder(done[0].dir);
   if (!folder) return;
@@ -480,7 +566,7 @@ async function saveAll() {
       ok++;
       last = target;
     }
-    const waiting = state.items.length - done.length;
+    const waiting = state.items.filter((i) => i.kind !== 'video').length - done.length;
     toast(`${ok} photo${ok === 1 ? '' : 's'} saved` + (waiting ? ` (${waiting} not ready yet)` : ''), {
       action: { label: SHOW_LABEL, run: () => api.show(last) },
     });
@@ -494,7 +580,7 @@ async function saveAll() {
 function setModel(id) {
   state.model = id;
   store('model', id);
-  document.querySelectorAll('.seg-btn').forEach((b) => {
+  document.querySelectorAll('.bar .seg-btn').forEach((b) => {
     b.setAttribute('aria-checked', String(b.dataset.model === id));
   });
   $('style-hint').textContent = STYLE_HINTS[id];
@@ -563,9 +649,10 @@ api.onProgress((p) => {
 // ---------------------------------------------------------------- input
 
 function wire() {
-  document.querySelectorAll('.seg-btn').forEach((b) => {
+  document.querySelectorAll('.bar .seg-btn').forEach((b) => {
     b.onclick = () => b.dataset.model !== state.model && setModel(b.dataset.model);
   });
+  wireVideo();
 
   $('btn-add').onclick = async () => addItems(await api.openFiles());
   $('btn-save').onclick = () => saveOne().catch((e) => toast(e.message, { error: true }));
@@ -681,6 +768,235 @@ function wire() {
   });
 }
 
+// ---------------------------------------------------------------- video
+
+const QUALITY_NOTES = {
+  fast: 'The AI looks at every 8th frame, more often when things move. Good for long films.',
+  balanced: 'The AI looks at every 4th frame, more often when things move. A good middle ground.',
+  best: 'The AI looks at every frame. The finest result, but slow: best for short clips.',
+};
+
+function videoSettings() {
+  return {
+    model: state.model,
+    preset: state.vquality,
+    flicker: state.vflicker,
+    saturation: state.sat / 100,
+    warmth: state.warm / 100,
+  };
+}
+
+function setSeg(id, value, disabled) {
+  document.querySelectorAll(`#${id} .seg-btn`).forEach((b) => {
+    b.setAttribute('aria-checked', String(b.dataset.value === value));
+    b.disabled = !!disabled;
+  });
+}
+
+function renderVideoPanel() {
+  const item = state.current;
+  const isVideo = !!(item && item.kind === 'video');
+  $('video-panel').hidden = !isVideo;
+  $('scrub-bar').hidden = !isVideo;
+  $('viewer').classList.toggle('has-scrub', isVideo);
+  document.querySelector('.info h2').textContent = isVideo ? 'Preview frame' : 'Photo';
+  lockStyle();
+  if (!isVideo) return;
+
+  const info = item.info;
+  const job = item.job && item.job.state ? item.job : null;
+  $('v-length').textContent = info ? clock(info.duration) : '…';
+  $('v-frames').textContent = info ? `${info.frames.toLocaleString()} at ${Math.round(info.fps * 100) / 100} fps` : '…';
+  if (info && document.activeElement !== $('scrub')) {
+    $('scrub').value = info.duration ? Math.round((1000 * item.frameTime) / info.duration) : 0;
+    $('scrub-time').textContent = `${clock(item.frameTime)} / ${clock(info.duration)}`;
+  }
+
+  // A job that exists keeps its own settings until it is thrown away.
+  const settings = job && job.state !== 'done' ? job.settings : null;
+  const quality = settings ? settings.preset : state.vquality;
+  const flicker = settings ? settings.flicker : state.vflicker;
+  setSeg('v-quality', quality, !!settings);
+  setSeg('v-flicker', flicker, !!settings);
+
+  const go = $('v-go');
+  const second = $('v-second');
+  const status = $('v-status');
+  const meter = $('v-meter');
+  second.hidden = true;
+  status.hidden = true;
+  meter.hidden = true;
+  go.disabled = false;
+
+  if (!info) {
+    $('v-note').textContent = item.error || 'Reading the video…';
+    go.textContent = 'Colour video…';
+    go.disabled = true;
+    return;
+  }
+
+  $('v-note').textContent = QUALITY_NOTES[quality];
+  api.video.estimate(quality, state.lastMs).then((sec) => {
+    if (state.current !== item || (item.job && item.job.state === 'running')) return;
+    const total = sec * info.frames;
+    $('v-note').textContent = `${QUALITY_NOTES[quality]} Estimated time on this computer: ${duration(total)} (busy scenes take longer).`;
+  });
+
+  const pct = job && job.total ? (100 * job.done) / job.total : 0;
+  if (!job) {
+    go.textContent = 'Colour video…';
+    if (state.videoBusy) {
+      go.disabled = true;
+      status.hidden = false;
+      status.textContent = 'Another video is being coloured. Pause it to start this one.';
+    }
+  } else if (job.state === 'running') {
+    meter.hidden = false;
+    $('v-bar').style.width = pct.toFixed(2) + '%';
+    status.hidden = false;
+    if (job.phase === 'joining') {
+      status.textContent = 'Almost done: joining the pieces and adding the sound…';
+    } else {
+      const speed = job.fps ? ` · ${job.fps.toFixed(1)} frames/s` : '';
+      const left = job.eta ? ` · ${duration(job.eta)} left` : ' · working out how long this takes…';
+      status.textContent = `${job.done.toLocaleString()} of ${job.total.toLocaleString()} frames${speed}${left}`;
+    }
+    go.textContent = 'Pause';
+  } else if (job.state === 'paused' || job.state === 'failed') {
+    meter.hidden = false;
+    $('v-bar').style.width = pct.toFixed(2) + '%';
+    status.hidden = false;
+    status.textContent =
+      job.state === 'failed'
+        ? `Stopped: ${job.error}`
+        : `Paused at ${Math.floor(pct)}%. What is done so far is kept.`;
+    go.textContent = 'Continue';
+    go.disabled = state.videoBusy;
+    second.hidden = false;
+    second.textContent = 'Start over';
+  } else if (job.state === 'done') {
+    status.hidden = false;
+    status.textContent = `Finished: ${job.output}`;
+    go.textContent = 'Show video';
+    second.hidden = false;
+    second.textContent = 'Colour again';
+  }
+}
+
+function lockStyle() {
+  document.querySelectorAll('.bar .seg-btn').forEach((b) => {
+    b.disabled = state.videoBusy;
+    b.title = state.videoBusy ? 'The style cannot change while a video is being coloured' : '';
+  });
+}
+
+async function videoAction(kind) {
+  const item = state.current;
+  if (!item || item.kind !== 'video') return;
+  const job = item.job;
+  const show = (r) => {
+    if (r.error) toast(r.error, { error: true });
+    else if (r.value !== undefined) item.job = r.value;
+    updateItem(item);
+    renderVideoPanel();
+  };
+
+  if (kind === 'go') {
+    if (job && job.state === 'running') return show(await api.video.pause(item.path));
+    if (job && (job.state === 'paused' || job.state === 'failed')) return show(await api.video.resume(item.path));
+    if (job && job.state === 'done') return api.show(job.output);
+    return startVideo(item);
+  }
+  // second button
+  if (job && job.state === 'done') {
+    await api.video.discard(item.path);
+    item.job = null;
+    updateItem(item);
+    return startVideo(item);
+  }
+  if (job) {
+    await api.video.discard(item.path);
+    item.job = null;
+    updateItem(item);
+    renderVideoPanel();
+  }
+}
+
+async function startVideo(item) {
+  const [base] = splitName(item.name);
+  const suggestion = await api.join(item.dir, `${base} (colour).mp4`);
+  const output = await api.video.saveAs(suggestion);
+  if (!output) return;
+  if (output.toLowerCase() === item.path.toLowerCase()) {
+    return toast('Choose another name: the original must not be overwritten.', { error: true });
+  }
+  const r = await api.video.start(item.path, videoSettings(), output);
+  if (r.error) return toast(r.error, { error: true });
+  item.job = r.value;
+  state.videoBusy = true;
+  updateItem(item);
+  renderVideoPanel();
+}
+
+function wireVideo() {
+  document.querySelectorAll('#v-quality .seg-btn').forEach((b) => {
+    b.onclick = () => {
+      state.vquality = b.dataset.value;
+      store('vquality', state.vquality);
+      renderVideoPanel();
+    };
+  });
+  document.querySelectorAll('#v-flicker .seg-btn').forEach((b) => {
+    b.onclick = () => {
+      state.vflicker = b.dataset.value;
+      store('vflicker', state.vflicker);
+      renderVideoPanel();
+    };
+  });
+  $('v-go').onclick = () => videoAction('go').catch((e) => toast(e.message, { error: true }));
+  $('v-second').onclick = () => videoAction('second').catch((e) => toast(e.message, { error: true }));
+
+  // Scrubbing picks another preview frame; it is coloured as soon as it is let go.
+  const scrub = $('scrub');
+  scrub.oninput = () => {
+    const item = state.current;
+    if (!item || !item.info) return;
+    const t = (Number(scrub.value) / 1000) * item.info.duration;
+    $('scrub-time').textContent = `${clock(t)} / ${clock(item.info.duration)}`;
+  };
+  scrub.onchange = () => {
+    const item = state.current;
+    if (!item || !item.info) return;
+    // Stay a little before the very end, where a frame may not exist.
+    item.frameTime = Math.min((Number(scrub.value) / 1000) * item.info.duration, Math.max(0, item.info.duration - 0.2));
+    item.results = {};
+    item.times = {};
+    item.error = null;
+    updateItem(item);
+    select(item);
+    pump();
+    scrub.blur();
+  };
+
+  api.video.onProgress((s) => {
+    if (!s) return;
+    state.videoBusy = s.state === 'running';
+    const item = state.items.find((i) => i.path.toLowerCase() === s.input.toLowerCase());
+    if (item) {
+      const was = item.job && item.job.state;
+      item.job = s;
+      updateItem(item);
+      if (was === 'running' && s.state === 'done') {
+        toast(`${item.name} is finished.`, { action: { label: SHOW_LABEL, run: () => api.show(s.output) } });
+      } else if (was === 'running' && s.state === 'failed') {
+        toast(`${item.name}: ${s.error}`, { error: true });
+      }
+    }
+    if (state.current && state.current.kind === 'video') renderVideoPanel();
+    else lockStyle();
+  });
+}
+
 // ---------------------------------------------------------------- self-test
 
 async function selftest(t) {
@@ -689,7 +1005,7 @@ async function selftest(t) {
     state.status = await api.modelStatus();
     if (!state.status[t.model].ready) throw new Error('model missing');
     const item = { path: t.input, results: {}, times: {} };
-    const bmp = await decode(t.input);
+    const bmp = await decode(item);
     report.size = [bmp.width, bmp.height];
     const input = C.toModelInput(modelPixels(bmp), SIZE);
     bmp.close();

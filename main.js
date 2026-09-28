@@ -1,9 +1,10 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, powerSaveBlocker } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const models = require('./models');
+const video = require('./video');
 
 const EXTS = new Set(['.jpg', '.jpeg', '.jfif', '.png', '.webp', '.bmp', '.gif', '.avif']);
 
@@ -15,6 +16,12 @@ let win = null;
 
 function isImage(file) {
   return EXTS.has(path.extname(file).toLowerCase());
+}
+
+function kindOf(file) {
+  if (isImage(file)) return 'photo';
+  if (video.isVideo(file)) return 'video';
+  return null;
 }
 
 function expand(paths) {
@@ -35,13 +42,13 @@ function expand(paths) {
         .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
         .forEach((n) => {
           const full = path.join(p, n);
-          if (isImage(full)) out.push(full);
+          if (kindOf(full)) out.push(full);
         });
-    } else if (isImage(p)) {
+    } else if (kindOf(p)) {
       out.push(p);
     }
   }
-  return out.map((p) => ({ path: p, name: path.basename(p), dir: path.dirname(p) }));
+  return out.map((p) => ({ path: p, name: path.basename(p), dir: path.dirname(p), kind: kindOf(p) }));
 }
 
 function explainWriteError(err, file) {
@@ -79,6 +86,21 @@ function createWindow() {
   win.setMenuBarVisibility(false);
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   win.on('closed', () => (win = null));
+
+  // Closing mid-film pauses it; the work done so far is kept.
+  win.on('close', (e) => {
+    if (!video.isRunning()) return;
+    const choice = dialog.showMessageBoxSync(win, {
+      type: 'question',
+      buttons: ['Keep colouring', 'Pause and close'],
+      defaultId: 0,
+      cancelId: 0,
+      message: 'Tinge is colouring a video.',
+      detail: 'If you close now, the video pauses. Everything finished so far is kept, and you can continue next time.',
+    });
+    if (choice === 0) e.preventDefault();
+    else video.pauseAll();
+  });
 }
 
 // ---------------------------------------------------------------- ipc
@@ -116,10 +138,16 @@ ipcMain.handle('colorize', async (_e, id, input, size) => {
 });
 
 ipcMain.handle('files:open', async () => {
+  const images = [...EXTS].map((x) => x.slice(1));
+  const videos = [...video.VIDEO_EXTS].map((x) => x.slice(1));
   const r = await dialog.showOpenDialog(win, {
-    title: 'Choose photos',
+    title: 'Choose photos or videos',
     properties: ['openFile', 'multiSelections'],
-    filters: [{ name: 'Images', extensions: [...EXTS].map((x) => x.slice(1)) }],
+    filters: [
+      { name: 'Photos and videos', extensions: [...images, ...videos] },
+      { name: 'Photos', extensions: images },
+      { name: 'Videos', extensions: videos },
+    ],
   });
   return r.canceled ? [] : expand(r.filePaths);
 });
@@ -176,6 +204,51 @@ ipcMain.handle('files:write', async (_e, file, data) => {
 
 ipcMain.handle('shell:show', (_e, file) => shell.showItemInFolder(file));
 
+// ---------------------------------------------------------------- video
+
+const wrap = (fn) => async (_e, ...args) => {
+  try {
+    return { ok: true, value: await fn(...args) };
+  } catch (err) {
+    return { error: err.message };
+  }
+};
+
+ipcMain.handle('video:probe', wrap((file) => video.probe(file)));
+ipcMain.handle('video:frame', wrap((file, t) => video.frame(file, t)));
+ipcMain.handle('video:status', wrap((file) => video.status(file)));
+ipcMain.handle('video:start', wrap((file, settings, output) => video.start(file, settings, output)));
+ipcMain.handle('video:resume', wrap((file) => video.resume(file)));
+ipcMain.handle('video:pause', wrap((file) => video.pause(file)));
+ipcMain.handle('video:discard', wrap((file) => video.discard(file)));
+ipcMain.handle('video:estimate', (_e, preset, msAt512) => video.estimate(preset, msAt512));
+
+ipcMain.handle('video:saveAs', async (_e, defaultPath) => {
+  const r = await dialog.showSaveDialog(win, {
+    title: 'Save coloured video',
+    defaultPath,
+    filters: [{ name: 'MP4 video', extensions: ['mp4'] }],
+  });
+  return r.canceled || !r.filePath ? null : r.filePath;
+});
+
+// A film can take all night; the computer must not doze off halfway.
+let sleepBlock = null;
+function onVideoProgress(s) {
+  const busy = s && s.state === 'running';
+  if (busy && sleepBlock === null) sleepBlock = powerSaveBlocker.start('prevent-app-suspension');
+  if (!busy && sleepBlock !== null) {
+    powerSaveBlocker.stop(sleepBlock);
+    sleepBlock = null;
+  }
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('video:progress', s);
+    if (process.platform === 'win32' || process.platform === 'darwin') {
+      win.setProgressBar(busy && s.total ? s.done / s.total : -1);
+    }
+  }
+}
+
 ipcMain.handle('selftest:get', () => {
   if (!SELFTEST) return null;
   const [input, output, model] = SELFTEST.split('|');
@@ -203,6 +276,7 @@ if (!SELFTEST && !process.env.TINGE_HIDDEN && !app.requestSingleInstanceLock()) 
 
   app.whenReady().then(() => {
     models.init(path.join(app.getPath('userData'), 'models'));
+    video.init({ workDir: path.join(app.getPath('userData'), 'video'), onProgress: onVideoProgress });
     createWindow();
   });
 
