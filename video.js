@@ -24,6 +24,7 @@ const fs = require('fs');
 const path = require('path');
 const models = require('./models');
 const VC = require('./videocolor');
+const C = require('./renderer/color.js');
 
 const VIDEO_EXTS = new Set([
   '.mp4', '.m4v', '.mov', '.avi', '.mkv', '.webm', '.mpg', '.mpeg', '.wmv', '.flv', '.3gp', '.ts', '.mts', '.m2ts', '.ogv', '.vob',
@@ -370,7 +371,9 @@ async function process_(job) {
   const H = info.outHeight;
   const ySize = W * H;
   const cSize = (W >> 1) * (H >> 1);
-  const S = preset.size;
+  // About preset.size^2 pixels, in the film's own proportions (as for photos).
+  const S = C.gridFor(W, H, preset.size * preset.size);
+  const gridCells = S[0] * S[1];
 
   // Carry-over between chunks: the last keyframe's colour, grey and signature.
   let last = null; // { idx, ab, grey, sig }
@@ -378,8 +381,8 @@ async function process_(job) {
   if (job.chunks > 0 && fs.existsSync(statePath)) {
     const raw = fs.readFileSync(statePath);
     const f = new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4);
-    const abLen = 2 * S * S;
-    const greyLen = S * S;
+    const abLen = 2 * gridCells;
+    const greyLen = gridCells;
     const thumbLen = VC.THUMB_W * VC.THUMB_H;
     let o = 0;
     const take = (len) => f.slice(o, (o += len));
@@ -444,9 +447,10 @@ async function process_(job) {
   const colour = async (Y) => {
     const t0 = Date.now();
     const input = VC.modelInput(Y, W, H, S);
-    const ab = await models.run(settings.model, input, S);
+    const grey = input.slice(0, gridCells); // before stretching: what the frames are compared on
+    const ab = C.tame(await models.run(settings.model, C.stretch(input, S), S), S);
     job.keyMs = Date.now() - t0;
-    return { ab, grey: input.subarray(0, S * S) };
+    return { ab, grey };
   };
 
   const emitFrame = async (f, ab) => {

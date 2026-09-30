@@ -1,7 +1,7 @@
 {
   "name": "tinge",
   "productName": "Tinge",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Colour black-and-white photos and films with DDColor, entirely on your own computer",
   "main": "main.js",
   "private": true,

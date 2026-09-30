@@ -12,8 +12,11 @@ const BASE = 'https://github.com/facefusion/facefusion-assets/releases/download/
 
 const MODELS = {
   natural: { file: 'ddcolor.onnx', bytes: 980103562 },
-  vivid: { file: 'ddcolor_artistic.onnx', bytes: 980103562 },
 };
+
+// Films started with version 1.1 may still name the old 'vivid' model; it was
+// paler than the main one and has been retired, so they use the main one.
+const ALIASES = { vivid: 'natural' };
 
 let dir = null;
 let loaded = { id: null, session: null, promise: null };
@@ -25,12 +28,14 @@ function init(modelDir) {
 }
 
 function fileOf(id) {
+  id = ALIASES[id] || id;
   const m = MODELS[id];
   if (!m) throw new Error(`Unknown model: ${id}`);
   return path.join(dir, m.file);
 }
 
 function isReady(id) {
+  id = ALIASES[id] || id;
   try {
     return fs.statSync(fileOf(id)).size === MODELS[id].bytes;
   } catch (_) {
@@ -49,6 +54,7 @@ function status() {
 // Downloads a model with progress. A second call for the same model hooks into
 // the download that is already running.
 function download(id, onProgress) {
+  id = ALIASES[id] || id;
   if (isReady(id)) return Promise.resolve();
   if (downloads.has(id)) return downloads.get(id);
 
@@ -88,6 +94,7 @@ function download(id, onProgress) {
 }
 
 async function session(id) {
+  id = ALIASES[id] || id;
   if (loaded.id === id && loaded.session) return loaded.session;
   if (loaded.id === id && loaded.promise) return loaded.promise;
   if (!isReady(id)) throw new Error('The model has not been downloaded yet');
@@ -106,10 +113,12 @@ async function session(id) {
   return s;
 }
 
-// input: Float32Array [1,3,S,S] -> Float32Array [2,S,S] (a and b)
+// input: Float32Array [1,3,H,W] -> Float32Array [2,H,W] (a and b).
+// size: a number for a square grid, or [width, height].
 async function run(id, input, size) {
   const s = await session(id);
-  const tensor = new ort.Tensor('float32', input, [1, 3, size, size]);
+  const [w, h] = typeof size === 'number' ? [size, size] : size;
+  const tensor = new ort.Tensor('float32', input, [1, 3, h, w]);
   const result = await s.run({ [s.inputNames[0]]: tensor });
   const out = result[s.outputNames[0]];
   return out.data;

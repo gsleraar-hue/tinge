@@ -36,8 +36,8 @@ Intel Macs are not supported: the AI runtime Tinge uses only ships for Apple Sil
 ## What it does
 
 - **Two styles.** *Natural* gives calm, believable colours, the best choice for
-  portraits and family photos. *Vivid* is richer and bolder, lovely for
-  landscapes, streets and postcards.
+  portraits and family photos. *Vivid* lays the same colours on more strongly,
+  lovely for landscapes, streets and postcards. Switching is instant.
 - **Keeps every detail.** The AI only chooses the colours. Light and shade come
   straight from your original at full resolution, so nothing gets blurred or
   redrawn, and faces stay exactly as they were.
@@ -83,12 +83,21 @@ Tinge runs [DDColor](https://github.com/piddnad/DDColor) (Kang et al., ICCV 2023
 a neural network trained on millions of colour photos, through
 [ONNX Runtime](https://onnxruntime.ai/) on your processor.
 
-1. The photo is scaled down to a grey 512 × 512 image and handed to the model.
+1. The photo is scaled down to a grey image of about 512 × 512 pixels, **in its
+   own proportions** (a portrait squashed into a square looks wrong to the
+   model), and **stretched to full contrast**, so faded prints with grey blacks
+   are recognised as well as crisp ones.
 2. The model answers with just the two colour channels (*a* and *b* in CIELAB).
-3. Those channels are scaled back up and combined with the lightness (*L*) of
-   the original photo at full size.
+3. **Purple is toned down.** Where DDColor is unsure (a cloth, a shadow, an
+   overcast sky) it tends to fall back on magenta, a colour that was rare in
+   old photographs. Reds and blues are left alone.
+4. The colour is scaled back up with a **guided filter**, which makes colour
+   edges follow the edges in the original. Without it, colour bleeds: lipstick
+   onto skin, sky onto a roof, a yellow background into white flowers.
+5. The colour is combined with the lightness (*L*) of the original photo at
+   full size.
 
-Step 3 is why the result is as sharp as the original: the model never touches
+Step 5 is why the result is as sharp as the original: the model never touches
 the detail, only the colour. For films the same idea works in the video's own
 YUV format: the brightness plane of every frame passes through untouched and
 Tinge writes only the two colour planes. [FFmpeg](https://ffmpeg.org/) does the
@@ -139,6 +148,7 @@ TINGE_SELFTEST="old.jpg|coloured.jpg|natural" npx electron .
 | `renderer/color.js` | Colour maths: model input, Lab conversion, recombining at full size |
 | `renderer/app.js` | The interface: list, queue, before/after view, sliders |
 | `dev/make-icon.js` | Draws the app icon (`npm run icon`) |
+| `dev/bench.js` | Colours a folder of photos in several variants side by side, to compare changes |
 
 ## Credits and licence
 

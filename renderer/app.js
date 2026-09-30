@@ -3,14 +3,18 @@
 const api = window.tinge;
 const C = window.TingeColor;
 
-const SIZE = 512; // DDColor was trained at 512x512
+const SIZE = 512; // DDColor was trained at 512x512; grids keep about that many pixels
 const PREVIEW_MAX = 2400; // longest side of the on-screen preview
+
+// Both styles use the same model; Vivid lays the colour on more strongly.
+// (DDColor's 'artistic' variant turned out paler, not bolder, so it is no longer used.)
+const STYLE_BOOST = { natural: 1, vivid: 1.35 };
 
 const STYLE_HINTS = {
   natural:
     'Calm, believable colours, like a colour photo from the time. The best choice for portraits and family photos.',
   vivid:
-    'Richer, bolder colours. Lovely for landscapes, streets and postcards; sometimes a little strong for skin.',
+    'The same colours, laid on more strongly. Lovely for landscapes, streets and postcards; sometimes a little strong for skin.',
 };
 
 const $ = (id) => document.getElementById(id);
@@ -18,7 +22,8 @@ const $ = (id) => document.getElementById(id);
 const state = {
   items: [],
   current: null,
-  model: load('model', 'natural'),
+  model: 'natural', // the colour model; both styles use it
+  style: load('style', 'natural'),
   sat: Number(load('sat', 100)),
   warm: Number(load('warm', 0)),
   split: 0.5,
@@ -119,20 +124,36 @@ function pixels(bitmap, w, h) {
 
 // Shrinking in halving steps gives a cleaner model input than going from
 // 6000 px to 512 in one go.
-function modelPixels(bitmap) {
+function modelPixels(bitmap, grid) {
+  const [gw, gh] = grid;
   let src = bitmap;
   let w = bitmap.width;
   let h = bitmap.height;
-  while (w > SIZE * 2 || h > SIZE * 2) {
-    w = Math.max(SIZE, Math.round(w / 2));
-    h = Math.max(SIZE, Math.round(h / 2));
+  while (w > gw * 2 || h > gh * 2) {
+    w = Math.max(gw, Math.round(w / 2));
+    h = Math.max(gh, Math.round(h / 2));
     const c = new OffscreenCanvas(w, h);
     const ctx = c.getContext('2d');
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(src, 0, 0, w, h);
     src = c;
   }
-  return pixels(src, SIZE, SIZE).data;
+  return pixels(src, gw, gh).data;
+}
+
+// Runs the model on a photo and prepares its colour for colorize():
+// 1. a grid in the photo's own proportions, so nothing looks squashed to the model;
+// 2. the model's input stretched to full contrast, which helps with faded prints;
+// 3. purple toned down, where DDColor tends to put it when unsure;
+// 4. guided-filter coefficients, so colour edges follow the original's edges.
+async function analyse(bmp, model) {
+  const grid = C.gridFor(bmp.width, bmp.height, SIZE * SIZE);
+  const px = modelPixels(bmp, grid);
+  const input = C.stretch(C.toModelInput(px, grid), grid);
+  const res = await api.colorize(model, input, grid);
+  if (res.error) throw new Error(res.error);
+  const ab = C.tame(res.ab, grid);
+  return { grid, coef: C.guide(ab, C.greyGrid(px, grid), grid), ms: res.ms, ab };
 }
 
 function fit(w, h, maxW, maxH) {
@@ -141,13 +162,13 @@ function fit(w, h, maxW, maxH) {
 }
 
 function opts() {
-  return { saturation: state.sat / 100, warmth: state.warm / 100 };
+  return { saturation: (state.sat / 100) * (STYLE_BOOST[state.style] || 1), warmth: state.warm / 100 };
 }
 
-async function thumbnail(bitmap, ab) {
+async function thumbnail(bitmap, colour) {
   const [w, h] = fit(bitmap.width, bitmap.height, 360, 240);
   const img = pixels(bitmap, w, h);
-  if (ab) C.colorize(img.data, w, h, ab, SIZE, opts(), img.data);
+  if (colour) C.colorize(img.data, w, h, colour.coef, colour.grid, opts(), img.data);
   const c = new OffscreenCanvas(w, h);
   c.getContext('2d').putImageData(img, 0, 0);
   const blob = await c.convertToBlob({ type: 'image/jpeg', quality: 0.85 });
@@ -374,17 +395,17 @@ function layout() {
 
 function paintAfter() {
   if (!view) return;
-  const ab = view.item.results[state.model];
+  const colour = view.item.results[state.model];
   const frame = $('frame');
-  frame.classList.toggle('pending', !ab);
+  frame.classList.toggle('pending', !colour);
   const ctx = $('after').getContext('2d');
-  if (!ab) {
+  if (!colour) {
     ctx.putImageData(view.src, 0, 0);
     $('meta-time').textContent = view.item.error ? 'failed' : 'in progress';
     return;
   }
   const out = new ImageData(view.w, view.h);
-  C.colorize(view.src.data, view.w, view.h, ab, SIZE, opts(), out.data);
+  C.colorize(view.src.data, view.w, view.h, colour.coef, colour.grid, opts(), out.data);
   ctx.putImageData(out, 0, 0);
   const ms = view.item.times[state.model];
   $('meta-time').textContent = ms ? `${(ms / 1000).toFixed(1)} s` : '–';
@@ -469,15 +490,13 @@ async function colorItem(item, model) {
   if (item === state.current) showBusy();
   try {
     const bmp = await decode(item);
-    const input = C.toModelInput(modelPixels(bmp), SIZE);
-    const res = await api.colorize(model, input, SIZE);
-    if (res.error) throw new Error(res.error);
-    item.results[model] = res.ab;
+    const res = await analyse(bmp, model);
+    item.results[model] = { grid: res.grid, coef: res.coef };
     item.times[model] = res.ms;
     state.lastMs = res.ms;
     store('lastMs', res.ms);
     if (item === state.current) renderVideoPanel();
-    const url = await thumbnail(bmp, res.ab);
+    const url = await thumbnail(bmp, item.results[model]);
     bmp.close();
     if (item.thumb) URL.revokeObjectURL(item.thumb);
     item.thumb = url;
@@ -518,7 +537,8 @@ async function renderFull(item, model, mime) {
   ctx.drawImage(bmp, 0, 0);
   bmp.close();
   const img = ctx.getImageData(0, 0, w, h);
-  C.colorize(img.data, w, h, item.results[model], SIZE, opts(), img.data);
+  const colour = item.results[model];
+  C.colorize(img.data, w, h, colour.coef, colour.grid, opts(), img.data);
   ctx.putImageData(img, 0, 0);
   const blob = await c.convertToBlob({ type: mime, quality: 0.95 });
   return new Uint8Array(await blob.arrayBuffer());
@@ -577,17 +597,17 @@ async function saveAll() {
 
 // ---------------------------------------------------------------- models
 
-function setModel(id) {
-  state.model = id;
-  store('model', id);
+// Switching style only changes how strongly the colour is laid on: instant.
+function setStyle(id) {
+  state.style = id;
+  store('style', id);
   document.querySelectorAll('.bar .seg-btn').forEach((b) => {
     b.setAttribute('aria-checked', String(b.dataset.model === id));
   });
   $('style-hint').textContent = STYLE_HINTS[id];
-  state.items.forEach(updateItem);
-  updateButtons();
   if (view) paintAfter();
-  ensureModel(id);
+  state.items.forEach((i) => i.results[state.model] && makeThumb(i, i.results[state.model]));
+  if (state.current && state.current.kind === 'video') renderVideoPanel();
 }
 
 async function ensureModel(id) {
@@ -604,8 +624,7 @@ async function ensureModel(id) {
 
 function askDownload(id) {
   const mb = Math.round(state.status[id].bytes / 1e6);
-  const name = id === 'natural' ? 'Natural' : 'Vivid';
-  $('modal-title').textContent = `Download the ‘${name}’ colour model`;
+  $('modal-title').textContent = 'Download the colour model';
   $('modal-text').textContent =
     'Tinge colours photos with an AI model (DDColor) that runs on your own computer. ' +
     `The model has to be downloaded once: ${mb} MB. After that everything works offline.`;
@@ -632,11 +651,6 @@ function askDownload(id) {
   };
   $('modal-cancel').onclick = () => {
     $('modal').hidden = true;
-    if (state.model === id && !state.status[id].ready) {
-      // Fall back to a model that is there, if there is one.
-      const other = Object.keys(state.status).find((k) => state.status[k].ready);
-      if (other && !$('modal-go').disabled) setModel(other);
-    }
   };
 }
 
@@ -650,7 +664,7 @@ api.onProgress((p) => {
 
 function wire() {
   document.querySelectorAll('.bar .seg-btn').forEach((b) => {
-    b.onclick = () => b.dataset.model !== state.model && setModel(b.dataset.model);
+    b.onclick = () => b.dataset.model !== state.style && setStyle(b.dataset.model);
   });
   wireVideo();
 
@@ -781,7 +795,7 @@ function videoSettings() {
     model: state.model,
     preset: state.vquality,
     flicker: state.vflicker,
-    saturation: state.sat / 100,
+    saturation: opts().saturation,
     warmth: state.warm / 100,
   };
 }
@@ -883,12 +897,9 @@ function renderVideoPanel() {
   }
 }
 
-function lockStyle() {
-  document.querySelectorAll('.bar .seg-btn').forEach((b) => {
-    b.disabled = state.videoBusy;
-    b.title = state.videoBusy ? 'The style cannot change while a video is being coloured' : '';
-  });
-}
+// The style only sets colour strength, which a running film has already taken
+// on board, so the style buttons never need to be locked.
+function lockStyle() {}
 
 async function videoAction(kind) {
   const item = state.current;
@@ -1007,10 +1018,9 @@ async function selftest(t) {
     const item = { path: t.input, results: {}, times: {} };
     const bmp = await decode(item);
     report.size = [bmp.width, bmp.height];
-    const input = C.toModelInput(modelPixels(bmp), SIZE);
+    const res = await analyse(bmp, t.model);
     bmp.close();
-    const res = await api.colorize(t.model, input, SIZE);
-    if (res.error) throw new Error(res.error);
+    report.grid = res.grid;
     report.inferMs = res.ms;
     let min = Infinity;
     let max = -Infinity;
@@ -1019,7 +1029,7 @@ async function selftest(t) {
       if (v > max) max = v;
     }
     report.abRange = [Math.round(min), Math.round(max)];
-    item.results[t.model] = res.ab;
+    item.results[t.model] = { grid: res.grid, coef: res.coef };
     const t0 = performance.now();
     const data = await renderFull(item, t.model, outputType(splitName(t.output)[1]).mime);
     report.renderMs = Math.round(performance.now() - t0);
@@ -1039,5 +1049,6 @@ async function selftest(t) {
   const t = await api.selftest();
   if (t) return selftest(t);
   wire();
-  setModel(state.model in STYLE_HINTS ? state.model : 'natural');
+  setStyle(state.style in STYLE_HINTS ? state.style : 'natural');
+  ensureModel(state.model);
 })();

@@ -69,6 +69,50 @@ check('colour follows the model, and strength 0 removes it again', () => {
   assert(none[0] === none[1] && none[1] === none[2], 'expected grey');
 });
 
+check('grids keep the photo proportions, in steps of 32', () => {
+  const [w, h] = C.gridFor(3000, 2000);
+  assert(w % 32 === 0 && h % 32 === 0, `${w}x${h}`);
+  assert(Math.abs(w / h - 1.5) < 0.1, `${w}x${h}`);
+  assert(Math.abs(w * h - 512 * 512) < 0.15 * 512 * 512, `${w}x${h}`);
+});
+
+check('contrast stretch spreads a faded input to the full range', () => {
+  const n = 32 * 32;
+  const input = new Float32Array(3 * n).map((_, i) => 0.3 + 0.3 * ((i % n) / n));
+  C.stretch(input, 32);
+  let lo = 1;
+  let hi = 0;
+  for (const v of input) {
+    lo = Math.min(lo, v);
+    hi = Math.max(hi, v);
+  }
+  assert(lo < 0.02 && hi > 0.98, `${lo}..${hi}`);
+});
+
+check('purple is toned down; red, blue and skin are not', () => {
+  // four pixels: purple, red, blue, skin (a values first, then b values)
+  const ab = new Float32Array([40, 40, 0, 20, -40, 0, -40, 25]);
+  const g = [4, 1];
+  C.tame(ab, g);
+  assert(Math.hypot(ab[0], ab[4]) < 0.5 * Math.hypot(40, 40), 'purple toned down');
+  assert(ab[1] === 40 && ab[5] === 0, 'red untouched');
+  assert(ab[2] === 0 && ab[6] === -40, 'blue untouched');
+  assert(ab[3] === 20 && ab[7] === 25, 'skin untouched');
+});
+
+check('guided colour stops at an edge instead of bleeding across it', () => {
+  // Left half dark, right half light; the model's colour is a soft ramp.
+  const size = 32;
+  const n = size * size;
+  const grey = new Float32Array(n).map((_, i) => (i % size < 16 ? 0.2 : 0.8));
+  const ab = new Float32Array(2 * n).map((_, i) => (i < n ? ((i % size) / size) * 60 : 0));
+  const { A, B } = C.guide(ab, grey, size);
+  const at = (x) => A[8 * size + x] * grey[8 * size + x] + B[8 * size + x];
+  const jump = at(16) - at(15);
+  const plain = ab[8 * size + 16] - ab[8 * size + 15];
+  assert(jump > 3 * plain, `edge jump ${jump.toFixed(1)} vs ${plain.toFixed(1)}`);
+});
+
 // ---------------------------------------------------------------- video
 
 const VC = require('../videocolor.js');

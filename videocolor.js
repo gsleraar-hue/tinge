@@ -45,10 +45,12 @@ function downsample(Y, W, H, tw, th) {
   return out;
 }
 
-// Y plane -> model input [1,3,S,S], grey 0..1 in all three channels.
-function modelInput(Y, W, H, size) {
-  const grey = downsample(Y, W, H, size, size);
-  const n = size * size;
+// Y plane -> model input [1,3,gh,gw], grey 0..1 in all three channels.
+// grid: [width, height] of the model's input.
+function modelInput(Y, W, H, grid) {
+  const [gw, gh] = C.dims(grid);
+  const grey = downsample(Y, W, H, gw, gh);
+  const n = gw * gh;
   const out = new Float32Array(3 * n);
   for (let i = 0; i < n; i++) {
     const g = grey[i] / 255;
@@ -86,39 +88,41 @@ function isCut(a, b) {
 
 // Writes the U and V planes (each W/2 x H/2) for one frame.
 // ab: the model's output (2 x S x S), opts: { saturation, warmth } as for photos.
-function chroma(Y, W, H, ab, size, opts, U, V) {
+function chroma(Y, W, H, ab, grid, opts, U, V) {
+  const [gw, gh] = C.dims(grid);
   const sat = opts && opts.saturation != null ? opts.saturation : 1;
   const warm = opts && opts.warmth ? opts.warmth : 0;
   const shiftA = warm * 3;
   const shiftB = warm * 12;
   const cw = W >> 1;
   const ch = H >> 1;
-  const n = size * size;
-  const max = size - 1;
+  const n = gw * gh;
+  const maxX = gw - 1;
+  const maxY = gh - 1;
   const rgb = new Uint8ClampedArray(3);
 
   const x0s = new Int32Array(cw);
   const x1s = new Int32Array(cw);
   const fxs = new Float32Array(cw);
   for (let x = 0; x < cw; x++) {
-    let u = ((x + 0.5) * size) / cw - 0.5;
+    let u = ((x + 0.5) * gw) / cw - 0.5;
     if (u < 0) u = 0;
-    if (u > max) u = max;
+    if (u > maxX) u = maxX;
     const x0 = u | 0;
     x0s[x] = x0;
-    x1s[x] = x0 < max ? x0 + 1 : x0;
+    x1s[x] = x0 < maxX ? x0 + 1 : x0;
     fxs[x] = u - x0;
   }
 
   for (let y = 0; y < ch; y++) {
-    let v = ((y + 0.5) * size) / ch - 0.5;
+    let v = ((y + 0.5) * gh) / ch - 0.5;
     if (v < 0) v = 0;
-    if (v > max) v = max;
+    if (v > maxY) v = maxY;
     const y0 = v | 0;
-    const y1 = y0 < max ? y0 + 1 : y0;
+    const y1 = y0 < maxY ? y0 + 1 : y0;
     const fy = v - y0;
-    const r0 = y0 * size;
-    const r1 = y1 * size;
+    const r0 = y0 * gw;
+    const r1 = y1 * gw;
     const lumaTop = 2 * y * W;
     const lumaBot = lumaTop + W;
 
@@ -211,8 +215,9 @@ function between(abA, abB, greyA, greyB, grey, t, out) {
 }
 
 // Grey version of a frame at the model's size, for comparing with keyframes.
-function grey(Y, W, H, size) {
-  const g = downsample(Y, W, H, size, size);
+function grey(Y, W, H, grid) {
+  const [gw, gh] = C.dims(grid);
+  const g = downsample(Y, W, H, gw, gh);
   for (let i = 0; i < g.length; i++) g[i] /= 255;
   return g;
 }
