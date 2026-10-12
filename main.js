@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const models = require('./models');
 const video = require('./video');
+const faces = require('./faces');
 
 const EXTS = new Set(['.jpg', '.jpeg', '.jfif', '.png', '.webp', '.bmp', '.gif', '.avif']);
 
@@ -132,6 +133,17 @@ ipcMain.handle('colorize', async (_e, id, input, size) => {
     const t0 = Date.now();
     const ab = await models.run(id, input, size);
     return { ab, ms: Date.now() - t0 };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+// Face labels for skinFix(), or null when the face models are not there.
+ipcMain.handle('faces:labels', async (_e, data, w, h, gw, gh) => {
+  try {
+    if (!models.isReady('faceDetect') || !models.isReady('faceParse')) return { value: null };
+    await faces.load(models.fileOf('faceDetect'), models.fileOf('faceParse'));
+    return { value: await faces.labels({ data, w, h }, gw, gh) };
   } catch (err) {
     return { error: err.message };
   }

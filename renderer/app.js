@@ -31,6 +31,7 @@ const state = {
   queueBusy: false,
   lastMs: Number(load('lastMs', 6000)), // model time at 512 px, for estimates
   vquality: load('vquality', 'balanced'),
+  brush: { on: false, colour: load('brushColour', '#b0352b'), size: Number(load('brushSize', 24)) },
   vflicker: load('vflicker', 'normal'),
   videoBusy: false, // some video is being coloured
 };
@@ -141,11 +142,22 @@ function modelPixels(bitmap, grid) {
   return pixels(src, gw, gh).data;
 }
 
+// A grey copy of the photo, at most 1280 px, for finding faces.
+function greyImage(bmp) {
+  const [w, h] = fit(bmp.width, bmp.height, 1280, 1280);
+  const px = pixels(bmp, w, h).data;
+  const data = new Uint8Array(w * h);
+  for (let i = 0; i < data.length; i++) data[i] = Math.round(0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2]);
+  return { data, w, h };
+}
+
 // Runs the model on a photo and prepares its colour for colorize():
 // 1. a grid in the photo's own proportions, so nothing looks squashed to the model;
 // 2. the model's input stretched to full contrast, which helps with faded prints;
 // 3. purple toned down, where DDColor tends to put it when unsure;
-// 4. guided-filter coefficients, so colour edges follow the original's edges.
+// 4. faces found and given one even, natural skin tone, red lips, neutral eyes;
+// 5. edge-aware smoothing against blotches, as guided-filter coefficients, so
+//    colour edges also follow the original's edges.
 async function analyse(bmp, model) {
   const grid = C.gridFor(bmp.width, bmp.height, SIZE * SIZE);
   const px = modelPixels(bmp, grid);
@@ -153,7 +165,18 @@ async function analyse(bmp, model) {
   const res = await api.colorize(model, input, grid);
   if (res.error) throw new Error(res.error);
   const ab = C.tame(res.ab, grid);
-  return { grid, coef: C.guide(ab, C.greyGrid(px, grid), grid), ms: res.ms, ab };
+  let labels = null;
+  let faceCount = 0;
+  const g = greyImage(bmp);
+  const f = await api.faceLabels(g.data, g.w, g.h, grid[0], grid[1]);
+  if (f.value) {
+    labels = f.value.labels;
+    faceCount = f.value.faces;
+    if (faceCount) C.skinFix(ab, labels, grid);
+  }
+  const grey = C.greyGrid(px, grid);
+  const coef = C.guideEven(ab, grey, grid, faceCount ? labels : null);
+  return { grid, coef, ms: res.ms, ab, grey, faces: faceCount, labels };
 }
 
 function fit(w, h, maxW, maxH) {
@@ -378,6 +401,9 @@ function layout() {
   const frame = $('frame');
   frame.style.width = cw + 'px';
   frame.style.height = ch + 'px';
+  const paintCanvas = $('paint');
+  paintCanvas.width = Math.round(cw * dpr);
+  paintCanvas.height = Math.round(ch * dpr);
   for (const id of ['before', 'after']) {
     const c = $(id);
     c.width = pw;
@@ -491,8 +517,11 @@ async function colorItem(item, model) {
   try {
     const bmp = await decode(item);
     const res = await analyse(bmp, model);
-    item.results[model] = { grid: res.grid, coef: res.coef };
+    // The model's colour, grey and face labels are kept so brush strokes can be
+    // laid over them and the result rebuilt without running the model again.
+    item.results[model] = { grid: res.grid, coef: res.coef, base: res.ab, grey: res.grey, labels: res.faces ? res.labels : null, strokes: [] };
     item.times[model] = res.ms;
+    if (item === state.current) renderBrushPanel();
     state.lastMs = res.ms;
     store('lastMs', res.ms);
     if (item === state.current) renderVideoPanel();
@@ -610,24 +639,38 @@ function setStyle(id) {
   if (state.current && state.current.kind === 'video') renderVideoPanel();
 }
 
+const FACE_MODELS = ['faceDetect', 'faceParse'];
+let faceOfferShown = false;
+
+// The colour model is needed; the face models are offered (better skin), once
+// per session, so people who said 'Later' are not nagged at every photo.
 async function ensureModel(id) {
   state.status = await api.modelStatus();
+  const missing = [id, ...FACE_MODELS].filter((m) => !state.status[m].ready);
   if (state.status[id].ready) {
     showBusy();
     api.warmModel(id);
     pump();
+    if (missing.length && !faceOfferShown) {
+      faceOfferShown = true;
+      askDownload(missing, true);
+    }
     return;
   }
   showBusy();
-  askDownload(id);
+  askDownload(missing, false);
 }
 
-function askDownload(id) {
-  const mb = Math.round(state.status[id].bytes / 1e6);
-  $('modal-title').textContent = 'Download the colour model';
-  $('modal-text').textContent =
-    'Tinge colours photos with an AI model (DDColor) that runs on your own computer. ' +
-    `The model has to be downloaded once: ${mb} MB. After that everything works offline.`;
+let downloadPlan = null; // { totals, done } for the combined progress bar
+
+function askDownload(ids, facesOnly) {
+  const mb = Math.round(ids.reduce((s, m) => s + state.status[m].bytes, 0) / 1e6);
+  $('modal-title').textContent = facesOnly ? 'Better skin tones' : 'Download the colour model';
+  $('modal-text').textContent = facesOnly
+    ? 'Tinge can find faces and give them one even, natural skin tone, with red lips and clear eyes, ' +
+      `instead of the blotchy guess the colour model makes. That needs a small face model: ${mb} MB, once.`
+    : 'Tinge colours photos with an AI model (DDColor) that runs on your own computer, plus a small face ' +
+      `model for natural skin tones. They have to be downloaded once: ${mb} MB. After that everything works offline.`;
   $('modal-bar').style.width = '0%';
   $('modal-progress').textContent = '';
   $('modal-go').disabled = false;
@@ -638,16 +681,30 @@ function askDownload(id) {
     $('modal-go').disabled = true;
     $('modal-cancel').textContent = 'Hide';
     $('modal-progress').textContent = 'Connecting…';
-    const r = await api.downloadModel(id);
-    if (r.error) {
-      $('modal-progress').textContent = r.error;
-      $('modal-go').disabled = false;
-      $('modal-go').textContent = 'Try again';
-      return;
+    downloadPlan = { done: {}, totals: Object.fromEntries(ids.map((m) => [m, state.status[m].bytes])) };
+    for (const m of ids) {
+      const r = await api.downloadModel(m);
+      if (r.error) {
+        $('modal-progress').textContent = r.error;
+        $('modal-go').disabled = false;
+        $('modal-go').textContent = 'Try again';
+        return;
+      }
+      downloadPlan.done[m] = downloadPlan.totals[m];
     }
+    downloadPlan = null;
     $('modal').hidden = true;
-    toast('Colour model installed.');
-    if (state.model === id) ensureModel(id);
+    toast(facesOnly ? 'Face model installed: photos now get natural skin tones.' : 'Colour model installed.');
+    if (facesOnly) {
+      // Colour again what was already done, now with the face step.
+      for (const item of state.items) {
+        item.results = {};
+        item.times = {};
+      }
+      state.items.forEach(updateItem);
+      if (view) paintAfter();
+    }
+    ensureModel(state.model);
   };
   $('modal-cancel').onclick = () => {
     $('modal').hidden = true;
@@ -655,9 +712,15 @@ function askDownload(id) {
 }
 
 api.onProgress((p) => {
-  const pct = (100 * p.done) / p.total;
-  $('modal-bar').style.width = pct.toFixed(1) + '%';
-  $('modal-progress').textContent = `${Math.round(p.done / 1e6)} of ${Math.round(p.total / 1e6)} MB`;
+  let done = p.done;
+  let total = p.total;
+  if (downloadPlan) {
+    downloadPlan.done[p.id] = p.done;
+    total = Object.values(downloadPlan.totals).reduce((s, v) => s + v, 0);
+    done = Object.values(downloadPlan.done).reduce((s, v) => s + v, 0);
+  }
+  $('modal-bar').style.width = ((100 * done) / total).toFixed(1) + '%';
+  $('modal-progress').textContent = `${Math.round(done / 1e6)} of ${Math.round(total / 1e6)} MB`;
 });
 
 // ---------------------------------------------------------------- input
@@ -716,11 +779,20 @@ function wire() {
   };
   frame.addEventListener('pointerdown', (e) => {
     frame.setPointerCapture(e.pointerId);
+    if (state.brush.on) return strokeStart(e);
     setFrom(e);
   });
   frame.addEventListener('pointermove', (e) => {
+    if (state.brush.on) return strokeMove(e);
     if (frame.hasPointerCapture(e.pointerId)) setFrom(e);
   });
+  frame.addEventListener('pointerup', (e) => {
+    if (state.brush.on) strokeEnd(e);
+  });
+  frame.addEventListener('pointerleave', () => {
+    if (state.brush.on && !drawing) clearPaint();
+  });
+  wireBrush();
   $('split').addEventListener('keydown', (e) => {
     const step = e.shiftKey ? 0.1 : 0.02;
     if (e.key === 'ArrowLeft') state.split = Math.max(0, state.split - step);
@@ -742,6 +814,11 @@ function wire() {
         select(state.items[i]);
         state.items[i].el.scrollIntoView({ block: 'nearest' });
       }
+    } else if (!e.ctrlKey && !e.metaKey && e.key.toLowerCase() === 'b') {
+      if (!$('brush-panel').hidden) setBrush(!state.brush.on);
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+      e.preventDefault();
+      undoStroke();
     } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
       e.preventDefault();
       saveOne().catch((err) => toast(err.message, { error: true }));
@@ -782,6 +859,210 @@ function wire() {
   });
 }
 
+// ---------------------------------------------------------------- brush
+
+// Colours people most often want to correct in old photos. null = no colour,
+// for things that should stay white, grey or black.
+const SWATCHES = [
+  ['Red', '#b0352b'],
+  ['Burgundy', '#7a2430'],
+  ['Pink', '#d98a9a'],
+  ['Orange', '#cc6b2c'],
+  ['Mustard', '#c9a03a'],
+  ['Olive', '#6f7440'],
+  ['Green', '#3f7a46'],
+  ['Teal', '#2f7a78'],
+  ['Sky blue', '#7fa7cf'],
+  ['Navy', '#2b3d66'],
+  ['Brown', '#7a5236'],
+  ['Tan', '#c19a6b'],
+  ['Skin', '#d6a585'],
+  ['No colour', null],
+];
+
+let drawing = null; // { points, rect } while a stroke is being drawn
+let lastPointer = null;
+
+function brushTarget() {
+  const item = state.current;
+  if (!item || item.kind === 'video') return null;
+  return item.results[state.model] || null;
+}
+
+function renderBrushPanel() {
+  const ok = !!brushTarget();
+  $('brush-panel').hidden = !ok;
+  if (!ok && state.brush.on) setBrush(false);
+  const r = brushTarget();
+  $('brush-undo').disabled = !(r && r.strokes.length);
+  $('brush-clear').disabled = !(r && r.strokes.length);
+}
+
+function setBrush(on) {
+  state.brush.on = on;
+  $('brush-toggle').setAttribute('aria-pressed', String(on));
+  $('brush-toggle').textContent = on ? 'Painting… (B to stop)' : 'Paint colour';
+  $('frame').classList.toggle('brushing', on);
+  clearPaint();
+}
+
+function clearPaint() {
+  const c = $('paint');
+  c.getContext('2d').clearRect(0, 0, c.width, c.height);
+}
+
+function pointerAt(e) {
+  const r = $('frame').getBoundingClientRect();
+  return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height, rect: r };
+}
+
+// The stroke so far plus a ring showing the brush, on the overlay canvas.
+function drawOverlay(p) {
+  const c = $('paint');
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, c.width, c.height);
+  const scale = c.width / p.rect.width;
+  const radius = (state.brush.size / 2) * scale;
+  const colour = state.brush.colour || '#9a9a9a';
+  if (drawing && drawing.points.length) {
+    ctx.save();
+    ctx.globalAlpha = 0.45;
+    ctx.strokeStyle = colour;
+    ctx.fillStyle = colour;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = radius * 2;
+    ctx.beginPath();
+    drawing.points.forEach(([x, y], i) => (i ? ctx.lineTo(x * c.width, y * c.height) : ctx.moveTo(x * c.width, y * c.height)));
+    if (drawing.points.length === 1) {
+      const [x, y] = drawing.points[0];
+      ctx.arc(x * c.width, y * c.height, radius, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  ctx.lineWidth = Math.max(1, scale);
+  ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+  ctx.beginPath();
+  ctx.arc(p.x * c.width, p.y * c.height, radius, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+  ctx.beginPath();
+  ctx.arc(p.x * c.width, p.y * c.height, radius + scale, 0, Math.PI * 2);
+  ctx.stroke();
+}
+
+function strokeStart(e) {
+  if (!brushTarget()) return;
+  const p = pointerAt(e);
+  drawing = { points: [[p.x, p.y]], rect: p.rect };
+  drawOverlay(p);
+}
+
+function strokeMove(e) {
+  const p = pointerAt(e);
+  lastPointer = p;
+  if (drawing) {
+    const [lx, ly] = drawing.points[drawing.points.length - 1];
+    // A point every couple of screen pixels is plenty.
+    if (Math.hypot((p.x - lx) * p.rect.width, (p.y - ly) * p.rect.height) > 3) drawing.points.push([p.x, p.y]);
+  }
+  drawOverlay(p);
+}
+
+function strokeEnd() {
+  if (!drawing) return;
+  const r = brushTarget();
+  const stroke = {
+    points: drawing.points,
+    radius: state.brush.size / 2 / drawing.rect.width,
+    colour: state.brush.colour ? C.hexAb(state.brush.colour) : [0, 0],
+  };
+  drawing = null;
+  if (!r) return clearPaint();
+  r.strokes.push(stroke);
+  rebuildColour();
+  if (lastPointer) drawOverlay(lastPointer);
+}
+
+function undoStroke() {
+  const r = brushTarget();
+  if (!r || !r.strokes.length) return;
+  r.strokes.pop();
+  rebuildColour();
+}
+
+// Brush strokes on top of the model's colour, then the same edge-aware
+// smoothing as always, so painted colour also ends neatly at edges.
+let thumbTimer = null;
+function rebuildColour() {
+  const item = state.current;
+  const r = brushTarget();
+  if (!r) return;
+  const ab = C.paint(r.base, r.grey, r.grid, r.strokes);
+  r.coef = C.guideEven(ab, r.grey, r.grid, r.labels);
+  paintAfter();
+  renderBrushPanel();
+  clearTimeout(thumbTimer);
+  thumbTimer = setTimeout(() => makeThumb(item, r), 400);
+}
+
+function wireBrush() {
+  const box = $('swatches');
+  for (const [name, hex] of SWATCHES) {
+    const b = document.createElement('button');
+    b.className = 'swatch' + (hex ? '' : ' none');
+    b.setAttribute('role', 'radio');
+    b.title = name;
+    b.setAttribute('aria-label', name);
+    if (hex) b.style.background = hex;
+    b.dataset.hex = hex || '';
+    b.onclick = () => pickColour(hex);
+    box.appendChild(b);
+  }
+  const custom = document.createElement('label');
+  custom.className = 'swatch custom';
+  custom.title = 'Another colour';
+  custom.innerHTML = '<input type="color" aria-label="Another colour" />';
+  custom.querySelector('input').oninput = (e) => pickColour(e.target.value);
+  box.appendChild(custom);
+
+  const markPicked = () => {
+    box.querySelectorAll('.swatch').forEach((b) => {
+      const hex = b.dataset.hex !== undefined ? b.dataset.hex || null : undefined;
+      b.setAttribute('aria-checked', String(hex !== undefined && hex === state.brush.colour));
+    });
+  };
+  function pickColour(hex) {
+    state.brush.colour = hex;
+    store('brushColour', hex || '');
+    markPicked();
+    if (!state.brush.on) setBrush(true);
+  }
+  if (state.brush.colour === '') state.brush.colour = null;
+  markPicked();
+
+  const size = $('brush-size');
+  size.value = state.brush.size;
+  $('out-brush').textContent = state.brush.size;
+  size.oninput = () => {
+    state.brush.size = Number(size.value);
+    store('brushSize', state.brush.size);
+    $('out-brush').textContent = state.brush.size;
+  };
+
+  $('brush-toggle').onclick = () => setBrush(!state.brush.on);
+  $('brush-undo').onclick = undoStroke;
+  $('brush-clear').onclick = () => {
+    const r = brushTarget();
+    if (!r) return;
+    r.strokes = [];
+    rebuildColour();
+  };
+}
+
 // ---------------------------------------------------------------- video
 
 const QUALITY_NOTES = {
@@ -808,6 +1089,7 @@ function setSeg(id, value, disabled) {
 }
 
 function renderVideoPanel() {
+  renderBrushPanel();
   const item = state.current;
   const isVideo = !!(item && item.kind === 'video');
   $('video-panel').hidden = !isVideo;
@@ -1021,6 +1303,7 @@ async function selftest(t) {
     const res = await analyse(bmp, t.model);
     bmp.close();
     report.grid = res.grid;
+    report.faces = res.faces;
     report.inferMs = res.ms;
     let min = Infinity;
     let max = -Infinity;

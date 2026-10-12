@@ -44,6 +44,7 @@
           <div class="frame" id="frame">
             <canvas id="after"></canvas>
             <canvas id="before"></canvas>
+            <canvas id="paint"></canvas>
             <div class="split" id="split" role="slider" tabindex="0" aria-label="Compare before and after">
               <span class="knob"></span>
             </div>
@@ -76,6 +77,21 @@
             <input type="range" id="warm" min="-100" max="100" step="1" value="0" />
           </label>
           <button id="btn-reset" class="link">Reset</button>
+        </section>
+
+        <section class="brush" id="brush-panel" hidden>
+          <h2>Colour brush</h2>
+          <button class="btn" id="brush-toggle" aria-pressed="false">Paint colour</button>
+          <div class="swatches" id="swatches" role="radiogroup" aria-label="Brush colour"></div>
+          <label class="field">
+            <span class="field-head"><span>Brush size</span><output id="out-brush">24</output></span>
+            <input type="range" id="brush-size" min="6" max="120" step="1" value="24" />
+          </label>
+          <div class="row">
+            <button class="link" id="brush-undo">Undo</button>
+            <button class="link" id="brush-clear">Remove all paint</button>
+          </div>
+          <p class="hint">Paint roughly over something to give it that colour. It spreads over the whole surface and stops at its edges. <kbd>B</kbd> brush on/off · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo</p>
         </section>
 
         <section class="video" id="video-panel" hidden>

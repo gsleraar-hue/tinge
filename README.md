@@ -23,7 +23,8 @@ Grab the latest version from the [Releases page](https://github.com/gsleraar-hue
 | Windows 10/11 | `Tinge-Setup-x.y.z.exe` (installer) or `Tinge-x.y.z-portable.exe` (no install) |
 | macOS on Apple Silicon (M1 and later) | `Tinge-x.y.z-arm64.dmg` |
 
-On first start Tinge downloads its colour model once (about 980 MB). After that
+On first start Tinge downloads its colour model once (about 980 MB), plus a
+small face model (106 MB) for natural skin tones. After that
 it works offline.
 
 **macOS:** the app is not notarised by Apple (that costs $99 a year). The first
@@ -43,6 +44,14 @@ Intel Macs are not supported: the AI runtime Tinge uses only ships for Apple Sil
   redrawn, and faces stay exactly as they were.
 - **Before and after.** Drag across the photo to compare, or hold <kbd>Space</kbd>
   to see the original.
+- **Natural skin.** Tinge finds faces and gives each one even, believable skin
+  tone, with red lips and clear eyes, instead of the blotchy, orange guess an
+  automatic colouriser tends to make.
+- **Colour brush.** Wrong colour somewhere? Pick a colour and paint roughly over
+  it. The colour spreads over that whole surface and stops at its edges; parts
+  of the brush that stray onto something else (a hand next to a glove) are left
+  alone. *No colour* is there for things that should stay white or grey.
+  Undo with <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Z</kbd>, switch the brush with <kbd>B</kbd>.
 - **Fine-tuning.** Sliders for *Colour strength* and *Warmth* for when the result
   is a little too bold or too cool.
 - **Batches.** Add as many photos as you like; they are coloured one by one.
@@ -91,13 +100,21 @@ a neural network trained on millions of colour photos, through
 3. **Purple is toned down.** Where DDColor is unsure (a cloth, a shadow, an
    overcast sky) it tends to fall back on magenta, a colour that was rare in
    old photographs. Reds and blues are left alone.
-4. The colour is scaled back up with a **guided filter**, which makes colour
-   edges follow the edges in the original. Without it, colour bleeds: lipstick
-   onto skin, sky onto a roof, a yellow background into white flowers.
-5. The colour is combined with the lightness (*L*) of the original photo at
+4. **Faces get one skin tone.** A face detector finds the faces and a face
+   parser marks, pixel by pixel, skin, lips, eyes and hair. Per face, the
+   model's typical skin colour is kept within the range real skin falls in and
+   laid evenly over all skin; lips get a clear red, eyes lose their colour.
+5. **Brush strokes**, if any, are laid on top. Colour spreads from a stroke the
+   way a fill would, except that every step costs more where the brightness
+   jumps, so it runs through a dress and stops at the arm.
+6. The colour is **smoothed against blotches and scaled back up** with a guided
+   filter, which keeps colour edges on the edges in the original. Without it,
+   colour bleeds: lipstick onto skin, sky onto a roof, a yellow background into
+   white flowers.
+7. The colour is combined with the lightness (*L*) of the original photo at
    full size.
 
-Step 5 is why the result is as sharp as the original: the model never touches
+Step 7 is why the result is as sharp as the original: the model never touches
 the detail, only the colour. For films the same idea works in the video's own
 YUV format: the brightness plane of every frame passes through untouched and
 Tinge writes only the two colour planes. [FFmpeg](https://ffmpeg.org/) does the
@@ -145,6 +162,7 @@ TINGE_SELFTEST="old.jpg|coloured.jpg|natural" npx electron .
 | `models.js` | Downloads the models and runs them with ONNX Runtime |
 | `video.js` | Colours films: keyframes, scene cuts, chunks, pause and continue |
 | `videocolor.js` | Per-frame video maths: colour planes, motion, smoothing |
+| `faces.js` | Finds faces and labels skin, lips and eyes |
 | `renderer/color.js` | Colour maths: model input, Lab conversion, recombining at full size |
 | `renderer/app.js` | The interface: list, queue, before/after view, sliders |
 | `dev/make-icon.js` | Draws the app icon (`npm run icon`) |
@@ -155,6 +173,11 @@ TINGE_SELFTEST="old.jpg|coloured.jpg|natural" npx electron .
 - Colourisation model: [DDColor](https://github.com/piddnad/DDColor) by Xiaoyang Kang et al.,
   Apache License 2.0. The ONNX exports are downloaded from the
   [FaceFusion assets](https://github.com/facefusion/facefusion-assets) release.
+- Face models, downloaded on first use: a YOLOv8 face detector (`yoloface_8n`,
+  from [yolov8-face](https://github.com/derronqi/yolov8-face), GPL-3.0) and a
+  BiSeNet face parser (`bisenet_resnet_34`, after
+  [face-parsing.PyTorch](https://github.com/zllrunning/face-parsing.PyTorch), MIT),
+  both from the FaceFusion assets release.
 - AI runtime: [ONNX Runtime](https://github.com/microsoft/onnxruntime) by Microsoft, MIT License.
 - Video: [FFmpeg](https://ffmpeg.org/), shipped as an unmodified binary from the
   [ffmpeg-static](https://github.com/eugeneware/ffmpeg-static) package. That build

@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('tinge', {
   warmModel: (id) => ipcRenderer.invoke('models:warm', id),
   onProgress: (fn) => ipcRenderer.on('models:progress', (_e, p) => fn(p)),
   colorize: (id, input, size) => ipcRenderer.invoke('colorize', id, input, size),
+  faceLabels: (data, w, h, gw, gh) => ipcRenderer.invoke('faces:labels', data, w, h, gw, gh),
 
   openFiles: () => ipcRenderer.invoke('files:open'),
   expand: (paths) => ipcRenderer.invoke('files:expand', paths),

@@ -746,3 +746,66 @@ kbd {
 .viewer.has-scrub .busy {
   bottom: 60px;
 }
+
+/* ---------------------------------------------------------------- brush */
+
+#paint {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.frame.brushing {
+  cursor: none;
+}
+
+.frame.brushing #before,
+.frame.brushing .split,
+.frame.brushing .tag-l {
+  display: none;
+}
+
+#brush-toggle[aria-pressed='true'] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.swatches {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+  width: 100%;
+}
+
+.swatch {
+  aspect-ratio: 1;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.15);
+  cursor: pointer;
+  padding: 0;
+}
+
+.swatch[aria-checked='true'] {
+  border-color: var(--text);
+}
+
+.swatch.none {
+  background: linear-gradient(135deg, transparent 45%, var(--accent-2) 45%, var(--accent-2) 55%, transparent 55%), #8a8a8a;
+}
+
+.swatch.custom {
+  position: relative;
+  background: conic-gradient(#d33, #dd3, #3d3, #3dd, #33d, #d3d, #d33);
+}
+
+.swatch.custom input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}

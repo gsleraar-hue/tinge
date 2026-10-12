@@ -12,6 +12,9 @@ const BASE = 'https://github.com/facefusion/facefusion-assets/releases/download/
 
 const MODELS = {
   natural: { file: 'ddcolor.onnx', bytes: 980103562 },
+  // For skin tones: a face detector and a face parser (see faces.js).
+  faceDetect: { file: 'yoloface_8n.onnx', bytes: 12659761 },
+  faceParse: { file: 'bisenet_resnet_34.onnx', bytes: 93632546 },
 };
 
 // Films started with version 1.1 may still name the old 'vivid' model; it was
@@ -124,4 +127,4 @@ async function run(id, input, size) {
   return out.data;
 }
 
-module.exports = { MODELS, init, status, download, session, run, isReady };
+module.exports = { MODELS, init, status, download, session, run, isReady, fileOf };

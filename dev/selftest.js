@@ -113,6 +113,23 @@ check('guided colour stops at an edge instead of bleeding across it', () => {
   assert(jump > 3 * plain, `edge jump ${jump.toFixed(1)} vs ${plain.toFixed(1)}`);
 });
 
+check('brush colour fills its own surface and stops at an edge', () => {
+  const g = [40, 20];
+  const n = 800;
+  const grey = new Float32Array(n).map((_, i) => (i % 40 < 20 ? 0.2 : 0.8));
+  const ab = C.paint(new Float32Array(2 * n), grey, g, [{ points: [[0.2, 0.5]], radius: 0.05, colour: [40, 20] }]);
+  const row = 10 * 40;
+  assert(ab[row + 2] > 39 && ab[row + 18] > 39, 'whole dark half painted');
+  assert(Math.abs(ab[row + 22]) < 1 && Math.abs(ab[row + 38]) < 1, 'light half untouched');
+});
+
+check('brush hex colours: red has +a, blue has -b, grey has none', () => {
+  const [ra] = C.hexAb('#b03a2e');
+  const [, bb] = C.hexAb('#2f5d9e');
+  const [ga, gb] = C.hexAb('#808080');
+  assert(ra > 30 && bb < -25 && Math.abs(ga) < 0.5 && Math.abs(gb) < 0.5);
+});
+
 // ---------------------------------------------------------------- video
 
 const VC = require('../videocolor.js');

@@ -11,6 +11,7 @@ const os = require('os');
 const path = require('path');
 const C = require('../renderer/color.js');
 const models = require('../models');
+const faces = require('../faces');
 
 const FF = require('ffmpeg-static');
 const SIZE = 512;
@@ -41,38 +42,30 @@ function writeJpg(pixels, w, h, file) {
 
 // The variants to compare. Each gets the model input and returns a grid for colorize().
 const VARIANTS = {
-  'aspect+tame': async (px, cache) => {
+  // Tinge 1.2: own proportions, stretched input, purple tamed, guided (radius 4).
+  'v1.2': async (px, cache) => {
     const g = cache.grid;
-    const ab = C.tame((await cache.aspectAb('natural')).slice(), g);
-    return C.guide(ab, C.greyGrid(cache.apx, g), g);
+    return C.guide(C.tame((await cache.aspectAb(model)).slice(), g), C.greyGrid(cache.apx, g), g);
   },
-  // In the photo's own proportions (grid from gridFor), contrast stretched, edge-guided.
-  aspect: async (px, cache) => {
+  // Even: edge-aware smoothing against blotches, colour strength given back.
+  even: async (px, cache) => {
     const g = cache.grid;
-    return C.guide(await models.run(model, C.stretch(C.toModelInput(cache.apx, g), g), g), C.greyGrid(cache.apx, g), g);
+    return C.guideEven(C.tame((await cache.aspectAb(model)).slice(), g), C.greyGrid(cache.apx, g), g);
   },
-  'aspect+flip': async (px, cache) => {
+  // Even + faces: one natural skin tone per face, red lips, neutral eyes.
+  'even+faces': async (px, cache) => {
     const g = cache.grid;
-    const input = C.stretch(C.toModelInput(cache.apx, g), g);
-    const a = await models.run(model, input, g);
-    const b = C.flip(await models.run(model, C.flip(input, g), g), g);
-    const avg = new Float32Array(a.length);
-    for (let i = 0; i < a.length; i++) avg[i] = (a[i] + b[i]) / 2;
-    return C.guide(avg, C.greyGrid(cache.apx, g), g);
-  },
-  current: async (px) => models.run(model, C.toModelInput(px, SIZE), SIZE),
-  guided: async (px, cache) => C.guide(await cache.plain(), C.greyGrid(px, SIZE), SIZE),
-  'guided+stretch': async (px) => C.guide(await models.run(model, C.stretch(C.toModelInput(px, SIZE), SIZE), SIZE), C.greyGrid(px, SIZE), SIZE),
-  'guided+flip': async (px, cache) => {
-    const a = await cache.plain();
-    const b = C.flip(await models.run(model, C.flip(C.toModelInput(px, SIZE), SIZE), SIZE), SIZE);
-    const avg = new Float32Array(a.length);
-    for (let i = 0; i < a.length; i++) avg[i] = (a[i] + b[i]) / 2;
-    return C.guide(avg, C.greyGrid(px, SIZE), SIZE);
+    const ab = C.tame((await cache.aspectAb(model)).slice(), g);
+    const t0 = Date.now();
+    const { labels, faces: count } = await faces.labels(cache.greyImg, g[0], g[1]);
+    console.log('  faces', count, Date.now() - t0, 'ms');
+    C.skinFix(ab, labels, g);
+    return C.guideEven(ab, C.greyGrid(cache.apx, g), g, labels);
   },
 };
 
 (async () => {
+  await faces.load(path.join(data, 'Tinge', 'models', 'yoloface_8n.onnx'), path.join(data, 'Tinge', 'models', 'bisenet_resnet_34.onnx'));
   const only = process.env.VARIANTS ? process.env.VARIANTS.split(',') : Object.keys(VARIANTS);
   for (const name of fs.readdirSync(inDir).filter((n) => /\.(jpe?g|png)$/i.test(n))) {
     const file = path.join(inDir, name);
@@ -87,11 +80,14 @@ const VARIANTS = {
     const abs = {};
     const aspectAb = (m) => (abs[m] = abs[m] || models.run(m, C.stretch(C.toModelInput(cache.apx, grid), grid), grid).then((x) => x.slice()));
     const cache = { aspectAb, plain: () => (plain = plain || models.run(model, C.toModelInput(px, SIZE), SIZE)), grid, apx: rgba(file, grid[0], grid[1]) };
+    const greyImg = { w, h, data: new Uint8Array(w * h) };
+    for (let i = 0; i < w * h; i++) greyImg.data[i] = Math.round(0.299 * full[i * 4] + 0.587 * full[i * 4 + 1] + 0.114 * full[i * 4 + 2]);
+    cache.greyImg = greyImg;
     const parts = [];
     for (const v of only) {
       const t0 = Date.now();
       const grid = await VARIANTS[v](px, cache);
-      const out = C.colorize(full, w, h, grid, v.startsWith('aspect') ? cache.grid : SIZE, {});
+      const out = C.colorize(full, w, h, grid, cache.grid, {});
       const part = path.join(outDir, `${path.parse(name).name}--${v}.jpg`);
       writeJpg(out, w, h, part);
       parts.push(part);
